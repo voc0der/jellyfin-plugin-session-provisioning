@@ -109,6 +109,10 @@ The token is returned once and is a normal Jellyfin session token carrying that 
 existing permissions. Use one stable `deviceId` per managed installation: re-minting the
 same user + `deviceId` rotates the token instead of piling up device entries.
 
+One exception: if the target user is at their `MaxActiveSessions` limit, Jellyfin
+refuses before replacing anything, so re-minting even that user's own existing device
+returns 409 and the previous token keeps working. Revoke the device first.
+
 Revoke exactly as you would any other client — the dashboard device list, or
 `DELETE /Devices?id=<deviceId>`.
 

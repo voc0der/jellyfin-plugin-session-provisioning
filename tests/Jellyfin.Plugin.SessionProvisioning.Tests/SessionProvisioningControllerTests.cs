@@ -44,18 +44,16 @@ public sealed class SessionProvisioningControllerTests
         SetPluginStatus(PluginStatus.Active);
     }
 
-    private void SetPluginStatus(PluginStatus status, bool isSupported = true)
+    private static PluginManifest ManifestWith(PluginStatus status) => new()
     {
-        var manifest = new PluginManifest
-        {
-            Id = Plugin.PluginId,
-            Name = "Session Provisioning",
-            Version = "1.0.0.0",
-            Status = status
-        };
+        Id = Plugin.PluginId,
+        Name = "Session Provisioning",
+        Version = "1.0.0.0",
+        Status = status
+    };
 
-        _pluginManager.Plugins.Returns(new[] { new LocalPlugin("/plugins/sp", isSupported, manifest) });
-    }
+    private void SetPluginStatus(PluginStatus status, bool isSupported = true)
+        => _pluginManager.Plugins.Returns(new[] { new LocalPlugin("/plugins/sp", isSupported, ManifestWith(status)) });
 
     private void SetNoPluginRecord()
         => _pluginManager.Plugins.Returns(Array.Empty<LocalPlugin>());
@@ -286,7 +284,14 @@ public sealed class SessionProvisioningControllerTests
         await Task.Delay(50);
 
         var second = CreateController(mintSerializer: serializer).MintSession(Request());
-        Assert.False(second.IsCompleted, "the second mint must not proceed while the first holds the gate");
+        await Task.Delay(50);
+
+        // The load-bearing assertion. Checking only that `second` is incomplete proves
+        // nothing: both calls await the same unfinished task, so it would be incomplete
+        // even if the gate let them in together. Counting the calls is what shows the
+        // second is still queued.
+        await _sessionManager.Received(1).AuthenticateDirect(Arg.Any<AuthenticationRequest>());
+        Assert.False(second.IsCompleted);
 
         inFlight.SetResult(new AuthenticationResult { AccessToken = MintedToken });
 
@@ -313,6 +318,103 @@ public sealed class SessionProvisioningControllerTests
         {
             held!.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Builds a source whose answer changes after the first read, standing in for an
+    /// administrator removing or rotating the hash while a request is queued.
+    /// </summary>
+    private static ProvisioningSecretSource ChangingSecretSource(string? firstAnswer, string? laterAnswer)
+    {
+        var reads = 0;
+        return new ProvisioningSecretSource(
+            name =>
+            {
+                if (name != ProvisioningSecretSource.HashVariable)
+                {
+                    return null;
+                }
+
+                return reads++ == 0 ? firstAnswer : laterAnswer;
+            },
+            _ => throw new FileNotFoundException());
+    }
+
+    // The gates run before the serializer wait, so their answers can be up to the
+    // timeout old by the time the request actually mints.
+    [Fact]
+    public async Task MintSession_SecretRemovedWhileQueued_IsRefused()
+    {
+        var controller = new SessionProvisioningController(
+            _sessionManager,
+            _userManager,
+            _pluginManager,
+            ChangingSecretSource(ProvisioningSecretVerifier.ComputeHashHex(Secret), null),
+            new MintRateLimiter(100, TimeSpan.FromMinutes(1)),
+            new MintSerializer(TimeSpan.FromSeconds(5)),
+            NullLogger<SessionProvisioningController>.Instance);
+
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Headers[ProvisioningSecretVerifier.HeaderName] = Secret;
+        controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
+
+        Assert.Equal(StatusCodes.Status403Forbidden, StatusOf(await controller.MintSession(Request())));
+        await AssertNoSessionCreated();
+    }
+
+    [Fact]
+    public async Task MintSession_SecretRotatedWhileQueued_IsRefused()
+    {
+        var controller = new SessionProvisioningController(
+            _sessionManager,
+            _userManager,
+            _pluginManager,
+            ChangingSecretSource(
+                ProvisioningSecretVerifier.ComputeHashHex(Secret),
+                ProvisioningSecretVerifier.ComputeHashHex("a-different-secret")),
+            new MintRateLimiter(100, TimeSpan.FromMinutes(1)),
+            new MintSerializer(TimeSpan.FromSeconds(5)),
+            NullLogger<SessionProvisioningController>.Instance);
+
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Headers[ProvisioningSecretVerifier.HeaderName] = Secret;
+        controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
+
+        Assert.Equal(StatusCodes.Status403Forbidden, StatusOf(await controller.MintSession(Request())));
+        await AssertNoSessionCreated();
+    }
+
+    [Fact]
+    public async Task MintSession_PluginDisabledWhileQueued_IsRefused()
+    {
+        var active = new LocalPlugin("/plugins/sp", true, ManifestWith(PluginStatus.Active));
+        var disabled = new LocalPlugin("/plugins/sp", true, ManifestWith(PluginStatus.Disabled));
+        _pluginManager.Plugins.Returns(_ => new[] { active }, _ => new[] { disabled });
+
+        Assert.Equal(StatusCodes.Status404NotFound, StatusOf(await CreateController().MintSession(Request())));
+        await AssertNoSessionCreated();
+    }
+
+    // A caller that has hung up must not have a working token rotated out from under it.
+    [Fact]
+    public async Task MintSession_CallerDisconnectsWhileQueued_DoesNotMint()
+    {
+        using var serializer = new MintSerializer(TimeSpan.FromSeconds(30));
+        using var held = await serializer.EnterAsync();
+        Assert.NotNull(held);
+
+        var controller = CreateController(mintSerializer: serializer);
+        using var aborted = new CancellationTokenSource();
+        controller.ControllerContext.HttpContext.RequestAborted = aborted.Token;
+
+        var pending = controller.MintSession(Request());
+        await Task.Delay(50);
+        Assert.False(pending.IsCompleted);
+
+        await aborted.CancelAsync();
+
+        Assert.Equal(499, StatusOf(await pending));
+        await AssertNoSessionCreated();
     }
 
     [Fact]

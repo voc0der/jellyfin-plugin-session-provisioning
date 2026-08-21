@@ -191,7 +191,7 @@ After a successful mint:
 6. Prove the plugin never wrote the token to the logs:
 
    ```sh
-   docker logs jf-sp-test 2>&1 | grep "$MINTED_TOKEN" | grep -v "Logging out access token"
+   docker logs jf-sp-test 2>&1 | grep -F -- "$MINTED_TOKEN" | grep -v "Logging out access token"
    ```
 
    Must be empty. A bare `grep -c` will **not** be zero after a revocation or a

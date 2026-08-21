@@ -28,15 +28,25 @@ public static class PluginServiceRegistratorTests
 
         Assert.NotNull(provider.GetService<ProvisioningSecretSource>());
         Assert.NotNull(provider.GetService<MintRateLimiter>());
+        Assert.NotNull(provider.GetService<MintSerializer>());
     }
 
-    // The window has to be shared across requests, or the limit means nothing.
+    // Both are only meaningful if every request shares one instance: a per-request
+    // limiter would never limit, and a per-request gate would never serialize.
     [Fact]
     public static void RegisterServices_RateLimiterIsASingleton()
     {
         using var provider = BuildProvider();
 
         Assert.Same(provider.GetRequiredService<MintRateLimiter>(), provider.GetRequiredService<MintRateLimiter>());
+    }
+
+    [Fact]
+    public static void RegisterServices_SerializerIsASingleton()
+    {
+        using var provider = BuildProvider();
+
+        Assert.Same(provider.GetRequiredService<MintSerializer>(), provider.GetRequiredService<MintSerializer>());
     }
 
     /// <summary>

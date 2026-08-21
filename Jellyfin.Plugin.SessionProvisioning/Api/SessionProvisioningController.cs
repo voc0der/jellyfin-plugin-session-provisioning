@@ -37,6 +37,12 @@ public class SessionProvisioningController : ControllerBase
     /// </remarks>
     private const string ProvisionedApp = "Jellyfin MPV Shim";
 
+    /// <summary>
+    /// Non-standard status for "the caller went away", as used by nginx. Nothing reads
+    /// it — the connection is gone — but it keeps the logs honest.
+    /// </summary>
+    private const int ClientClosedRequest = 499;
+
     private readonly ISessionManager _sessionManager;
     private readonly IUserManager _userManager;
     private readonly IPluginManager _pluginManager;
@@ -123,17 +129,8 @@ public class SessionProvisioningController : ControllerBase
 
         // Gate two. Jellyfin's elevation policy is gate one, applied by [Authorize]
         // above. Both are mandatory; neither is ever conditional.
-        var configuredHash = _secretSource.GetConfiguredHash();
-        if (!ProvisioningSecretVerifier.IsConfigured(configuredHash))
+        if (!IsSecretValid())
         {
-            _logger.LogWarning("Session provisioning rejected: no provisioning secret is configured");
-            return StatusCode(StatusCodes.Status403Forbidden);
-        }
-
-        Request.Headers.TryGetValue(ProvisioningSecretVerifier.HeaderName, out var presentedSecret);
-        if (!ProvisioningSecretVerifier.Verify(configuredHash, presentedSecret))
-        {
-            _logger.LogWarning("Session provisioning rejected: invalid or missing provisioning secret");
             return StatusCode(StatusCodes.Status403Forbidden);
         }
 
@@ -146,11 +143,33 @@ public class SessionProvisioningController : ControllerBase
         // concurrent calls for the same user and device: each racing call sees the old
         // devices, deletes them, and adds its own, leaving several live tokens for one
         // logical device. See MintSerializer.
-        using var slot = await _mintSerializer.EnterAsync().ConfigureAwait(false);
+        using var slot = await _mintSerializer.EnterAsync(HttpContext.RequestAborted).ConfigureAwait(false);
         if (slot is null)
         {
+            if (HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                _logger.LogWarning("Session provisioning abandoned: the caller disconnected while queued");
+                return StatusCode(ClientClosedRequest);
+            }
+
             _logger.LogWarning("Session provisioning rejected: timed out waiting for an in-flight request");
             return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+
+        // Re-check both kill switches now the wait is over. A request can sit here for
+        // the length of the timeout, during which an administrator may have disabled
+        // the plugin or removed/rotated the secret hash; the checks above are only as
+        // fresh as the moment they ran. Deciding to revoke this capability must not be
+        // defeated by a request that queued while it was still permitted.
+        if (!IsPluginActive())
+        {
+            _logger.LogWarning("Session provisioning rejected: the plugin was deactivated while the request queued");
+            return NotFound();
+        }
+
+        if (!IsSecretValid())
+        {
+            return StatusCode(StatusCodes.Status403Forbidden);
         }
 
         // Resolve the target user before touching the session machinery, so an unknown
@@ -211,6 +230,34 @@ public class SessionProvisioningController : ControllerBase
             DeviceName = request.DeviceName,
             AccessToken = result.AccessToken
         });
+    }
+
+    /// <summary>
+    /// Verifies the provisioning secret presented on this request against the hash the
+    /// deployment currently supplies.
+    /// </summary>
+    /// <remarks>
+    /// Re-reads the configured hash on every call, so removing or rotating it takes
+    /// effect immediately, including for a request already in flight.
+    /// </remarks>
+    /// <returns><c>true</c> if a usable hash is configured and the header matches it.</returns>
+    private bool IsSecretValid()
+    {
+        var configuredHash = _secretSource.GetConfiguredHash();
+        if (!ProvisioningSecretVerifier.IsConfigured(configuredHash))
+        {
+            _logger.LogWarning("Session provisioning rejected: no provisioning secret is configured");
+            return false;
+        }
+
+        Request.Headers.TryGetValue(ProvisioningSecretVerifier.HeaderName, out var presentedSecret);
+        if (!ProvisioningSecretVerifier.Verify(configuredHash, presentedSecret))
+        {
+            _logger.LogWarning("Session provisioning rejected: invalid or missing provisioning secret");
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

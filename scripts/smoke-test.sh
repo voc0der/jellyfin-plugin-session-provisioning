@@ -194,6 +194,11 @@ mint() { # auth-header secret body -> prints status code, body in $WORK/last.jso
 tokenauth() { echo "Authorization: MediaBrowser Token=\"$1\""; }
 body() { echo "{\"userId\":\"$1\",\"deviceId\":\"$2\",\"deviceName\":\"${3-Living Room MPV Shim}\",\"appVersion\":\"${4-3.0.0}\"}"; }
 
+# Baseline BEFORE any rejection runs. Captured afterwards, a device created by a
+# request that was supposed to fail would already be inside the baseline, and the
+# later "three successes added three devices" assertion would still pass.
+DEVICES_BEFORE=$(curl -s "$JF/Devices" -H "$(ah "$ADMIN_TOKEN")" | jq_get '["Items"].__len__()')
+
 echo "==> Authorization matrix"
 check "anonymous, no secret"                "401" "$(mint "" "" "$(body "$BOB_ID" dev-x)")"
 check "anonymous, valid secret"             "401" "$(mint "" "$SECRET" "$(body "$BOB_ID" dev-x)")"
@@ -216,7 +221,8 @@ check "malformed guid"                      "400" "$(mint "$(ah "$ADMIN_TOKEN")"
 check "missing app version"                 "400" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" dev-x 'Device' '')")"
 check "empty body"                          "400" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" '{}')"
 
-DEVICES_BEFORE=$(curl -s "$JF/Devices" -H "$(ah "$ADMIN_TOKEN")" | jq_get '["Items"].__len__()')
+check "rejections created no devices"        "$DEVICES_BEFORE" \
+    "$(curl -s "$JF/Devices" -H "$(ah "$ADMIN_TOKEN")" | jq_get '["Items"].__len__()')"
 
 echo "==> Successful provisioning"
 check "admin, valid secret, normal user"    "200" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-livingroom-1)")"
@@ -243,6 +249,7 @@ check "re-mint same user+device"            "200" "$(mint "$(ah "$ADMIN_TOKEN")"
 REMINTED_TOKEN=$(jq_get '["AccessToken"]' < "$WORK/last.json")
 check "new token differs"                   "different" "$([ "$REMINTED_TOKEN" != "$MINTED_TOKEN" ] && echo different || echo same)"
 check "old token no longer authenticates"   "401" "$(curl -s -o /dev/null -w '%{http_code}' "$JF/Users/Me" -H "$(tokenauth "$MINTED_TOKEN")")"
+check "replacement token actually works"    "200" "$(curl -s -o /dev/null -w '%{http_code}' "$JF/Users/Me" -H "$(tokenauth "$REMINTED_TOKEN")")"
 check "device count unchanged by re-mint"   "$DEVICES_AFTER" "$(curl -s "$JF/Devices" -H "$(ah "$ADMIN_TOKEN")" | jq_get '["Items"].__len__()')"
 
 echo "==> Concurrent mints for the same device"
@@ -302,6 +309,9 @@ check "log search can find a planted string" "yes" \
 # that upstream line and none from plugin activity.
 TOKEN_HITS=$(echo "$LOGS" | grep -cF -- "$REMINTED_TOKEN" || true)
 TOKEN_UPSTREAM=$(echo "$LOGS" | grep -F -- "$REMINTED_TOKEN" | grep -c "Logging out access token" || true)
+# Require at least one occurrence as well as agreement: 0 == 0 would otherwise pass
+# for a token that never existed, saying nothing about where tokens can appear.
+check "upstream logout did log the token"   "yes" "$([ "${TOKEN_HITS:-0}" -ge 1 ] && echo yes || echo no)"
 check "token only logged by upstream logout" "$TOKEN_HITS" "$TOKEN_UPSTREAM"
 check "token not logged before revocation"  "0" "$(echo "$LOGS" | grep -F -- "$REMINTED_TOKEN" | grep -vc "Logging out access token" || true)"
 check "provisioning secret never logged"    "0" "$(echo "$LOGS" | grep -cF -- "$SECRET" || true)"
@@ -321,12 +331,21 @@ CAP_POLICY=$(curl -s "$JF/Users/$CAP_USER" -H "$(ah "$ADMIN_TOKEN")" \
 curl -s "${RETRY[@]}" -X POST "$JF/Users/$CAP_USER/Policy" -H "$(ah "$ADMIN_TOKEN")" \
     -H 'Content-Type: application/json' -d "$CAP_POLICY" >/dev/null
 check "first session within cap"            "200" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$CAP_USER" capped-dev-1)")"
+cp "$WORK/last.json" "$WORK/capped-first.json"
 check "session cap exceeded -> 409"         "409" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$CAP_USER" capped-dev-2)")"
 
 DEV_POLICY=$(curl -s "$JF/Users/$CAP_USER" -H "$(ah "$ADMIN_TOKEN")" \
     | python3 -c 'import json,sys; p=json.load(sys.stdin)["Policy"]; p["MaxActiveSessions"]=0; p["EnableAllDevices"]=False; p["EnabledDevices"]=["some-other-device"]; print(json.dumps(p))')
 curl -s "${RETRY[@]}" -X POST "$JF/Users/$CAP_USER/Policy" -H "$(ah "$ADMIN_TOKEN")" \
     -H 'Content-Type: application/json' -d "$DEV_POLICY" >/dev/null
+# Rotation is NOT unconditional: AuthenticateNewSessionInternal checks
+# MaxActiveSessions before GetAuthorizationToken replaces the device token, so a user
+# at their cap cannot re-mint even their own existing device. The old token survives.
+CAPPED_TOKEN=$(jq_get '["AccessToken"]' < "$WORK/capped-first.json" 2>/dev/null || echo "")
+check "re-mint of same device at cap -> 409" "409" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$CAP_USER" capped-dev-1)")"
+check "old token survives a refused re-mint" "200" \
+    "$(curl -s -o /dev/null -w '%{http_code}' "$JF/Users/Me" -H "$(tokenauth "$CAPPED_TOKEN")")"
+
 check "device restriction -> 409"           "409" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$CAP_USER" capped-dev-3)")"
 check "409 logged by the plugin, not the middleware" "yes" \
     "$(docker logs "$CONTAINER" 2>&1 | grep -q "Session provisioning refused by Jellyfin" && echo yes || echo no)"

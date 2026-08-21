@@ -48,7 +48,9 @@ public class MintSessionRequest
     /// </summary>
     /// <remarks>
     /// One stable ID per managed logical installation. Reusing an ID rotates that
-    /// installation's token; a new ID creates an additional device entry.
+    /// installation's token; a new ID creates an additional device entry. Rotation is
+    /// refused with 409 when the target user is at their MaxActiveSessions limit,
+    /// because Jellyfin checks the cap before replacing the existing device.
     /// </remarks>
     [Required]
     [StringLength(128, MinimumLength = 1)]

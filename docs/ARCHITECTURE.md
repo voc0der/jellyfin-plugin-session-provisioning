@@ -169,7 +169,17 @@ invalidates the previous token and issues a new one. It does not accumulate devi
 A different `deviceId` creates an additional device entry — hence the stable-device-id
 rule in "Device-ID semantics".
 
-**That guarantee holds only for serialized calls.** `GetAuthorizationToken` reads the
+**Two conditions qualify that guarantee.**
+
+First, the target user must not be at their session cap.
+`AuthenticateNewSessionInternal` checks `MaxActiveSessions` *before*
+`GetAuthorizationToken` replaces the device token, and the session being replaced
+counts toward the cap — so a user at their limit gets 409 even when re-minting a device
+they already own, and the previous token stays valid. Verified: cap of 1, re-mint of
+the same device, 409, old token still authenticating. Revoke the device first rather
+than raising the cap; the plugin must not work around a Jellyfin policy.
+
+Second, **the guarantee holds only for serialized calls.** `GetAuthorizationToken` reads the
 matching devices, logs them out, and creates a replacement with no lock around the
 sequence, so concurrent calls for the same user and device each observe the original
 set, delete it, and insert their own row. Measured against a real server, eight
@@ -346,10 +356,17 @@ Consequences, all verified live:
 |---|---|---|---|
 | plugin instance fails to construct (`Malfunctioned`) | yes | refused by the gate below | route gone |
 | plugin disabled via `POST /Plugins/{id}/{version}/Disable` | yes | refused by the gate below | route gone |
-| plugin directory removed | yes | refused by the gate below | route gone |
+| plugin directory removed (files deleted under a running server) | yes | **still mints** | route gone |
 
 The route stays mapped in every "before restart" case — ASP.NET has no way to drop it —
 so the plugin has to answer for itself.
+
+Deleting the plugin directory out from under a running server is the one case the gate
+does **not** catch: `PluginManager` keeps its in-memory `LocalPlugin` record, still
+marked `Active`, so the check passes and minting continues until restart. Verified
+directly — a mint after `rm -rf` of the plugin directory returned 200 and created a
+device. Disabling through the API is the supported way to revoke the capability
+immediately; removing files is not, and pretending otherwise in this table was wrong.
 
 Disabling deserves a closer look. `PluginManager.DisablePlugin` writes `Disabled` to the
 manifest on disk, then `ProcessAlternative` sets the **in-memory** status to

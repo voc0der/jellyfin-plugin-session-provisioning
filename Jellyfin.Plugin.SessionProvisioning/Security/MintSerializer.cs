@@ -54,14 +54,25 @@ public sealed class MintSerializer : IDisposable
     /// <summary>
     /// Waits for exclusive access to the mint path.
     /// </summary>
+    /// <param name="cancellationToken">Abandons the wait, e.g. when the caller disconnects.</param>
     /// <returns>
-    /// A handle to dispose when finished, or <c>null</c> if the wait timed out, in
-    /// which case the caller must not proceed.
+    /// A handle to dispose when finished, or <c>null</c> if the wait timed out or was
+    /// cancelled, in which case the caller must not proceed. Inspect the token to tell
+    /// the two apart.
     /// </returns>
-    public async Task<IDisposable?> EnterAsync()
+    public async Task<IDisposable?> EnterAsync(CancellationToken cancellationToken = default)
     {
-        if (!await _semaphore.WaitAsync(_timeout).ConfigureAwait(false))
+        try
         {
+            if (!await _semaphore.WaitAsync(_timeout, cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A queued request whose caller has gone away must not go on to rotate a
+            // working token into a replacement nobody will receive.
             return null;
         }
 
