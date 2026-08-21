@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="banner.png" alt="Jellyfin Session Provisioning" width="880" />
+  <img src="icon.png" alt="Jellyfin Session Provisioning" width="880" />
 </p>
 
 # Session Provisioning
