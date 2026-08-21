@@ -9,6 +9,10 @@ already been reviewed once by the agent that wrote it, which caught six real def
 so the interesting question is what survived that pass. Section 8 lists where the
 residual risk is concentrated.
 
+**Round 2:** an external review pass has since been applied — see section 10. Every
+finding was reproduced before being fixed, and two documentation claims were tested and
+found wrong. Current state: 106 unit tests, 69 live checks.
+
 ---
 
 ## 1. What it is
@@ -42,12 +46,12 @@ the original spec's phase separation.
 
 ```text
 repo     github.com/voc0der/jellyfin-plugin-session-provisioning (local only, nothing pushed)
-branch   main, 13 commits, clean tree
+branch   main, 14 commits, clean tree
 target   Jellyfin 10.11.11 / net9.0 / targetAbi 10.11.0.0
 guid     8d4bcbe8-ddd2-4c3a-ba8f-a7b500943e6b (unique; template's GUID absent from repo)
 licence  MIT (voc0der)
-size     829 lines plugin, 895 lines tests, 414 lines smoke script
-tests    101 unit, 64 live checks against a real Jellyfin container — all green
+size     889 lines plugin, 1007 lines tests, 433 lines smoke script
+tests    106 unit, 69 live checks against a real Jellyfin container — all green
 build    dotnet build -c Release, 0 warnings (TreatWarningsAsErrors, AllEnabledByDefault)
 ```
 
@@ -75,19 +79,21 @@ reproduce), `AGENTS.md` (rules for future agents).
 ## 3. Request path (order matters, and is tested)
 
 ```text
+[ApiController] model validation         → 400   (runs BEFORE the action)
+    ↓
 [Authorize(Policy = Policies.RequiresElevation)]   Jellyfin elevation — gate one
     ↓
 plugin active?           not PluginStatus.Active → 404   (fails closed if no record)
     ↓
 rate limit               over 120/min → 429 + Retry-After
     ↓
-secret hash configured?  no/malformed → 403
+secret hash configured + X-Session-Provisioning-Secret verified  → 403 — gate two
     ↓
-X-Session-Provisioning-Secret verified   constant-time → 403 — gate two
+userId non-empty                         → 400
     ↓
-userId non-empty, model validation       → 400
+serializer               one mint at a time; 30s wait → 503; caller gone → 499
     ↓
-serializer               one mint at a time; 30s wait → 503
+RE-CHECK plugin active + secret          → 404 / 403
     ↓
 user resolved            unknown → 404
     ↓
@@ -95,6 +101,11 @@ ISessionManager.AuthenticateDirect       App fixed to "Jellyfin MPV Shim"
     ↓  AuthenticationException → 404   SecurityException → 409
 200 + token once; audit line logs user + device only
 ```
+
+Authorization filters run before model binding, so an anonymous caller still gets 401;
+but an elevated caller sending a malformed body gets 400 before the plugin's own gates
+run. The re-check after the wait exists because the earlier answers can be up to the
+timeout stale.
 
 The rate limit precedes the secret check deliberately: an elevated caller must not be
 able to guess the secret at speed. A valid secret does not bypass it.
@@ -229,3 +240,39 @@ separating: correctness bugs; security-model gaps; places where a test asserts l
 it appears to; and anything in `docs/` that is now inaccurate. Style and structure
 feedback is welcome but lowest priority — the plugin is deliberately small and flat, and
 should stay auditable in a few minutes by a Jellyfin administrator.
+
+
+---
+
+## 10. Round-2 review: what was found and done
+
+All six code/test findings were reproduced first, then fixed.
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | Kill-switch checks go stale while a request queues behind the serializer | **Fixed.** Plugin status and secret re-checked immediately after acquiring the slot; early checks kept so invalid callers cannot occupy the queue. Covered by unit tests for secret-removed, secret-rotated, and plugin-disabled while queued. |
+| 2 | A disconnected queued request could still mint | **Fixed.** `EnterAsync` takes a `CancellationToken`; the controller passes `HttpContext.RequestAborted`; an abandoned wait returns 499 and mints nothing. Cancellation stays best-effort once `AuthenticateDirect` starts — no cancellation overload exists. |
+| 3 | "failures minted nothing" was vacuous — baseline captured after the rejections | **Fixed.** Baseline moved before the rejection matrix, with an immediate check that rejections changed the device count by zero. |
+| 4 | Rotation/revocation could pass with a non-working replacement token | **Fixed.** The replacement is now authenticated (expect 200) before revocation, and the log check requires ≥1 upstream occurrence instead of only `TOKEN_HITS == TOKEN_UPSTREAM`. |
+| 5 | Same-device rotation is not unconditional under `MaxActiveSessions` | **Confirmed and documented.** Verified live: cap 1 → re-mint of the user's own device returns 409, old token still authenticates. Documented in `MintSessionRequest`, README, and ARCHITECTURE §5; covered by two live checks. The cap is not worked around — revoke the device first. |
+| 6 | Controller contention test proved nothing | **Fixed.** It now counts `AuthenticateDirect` calls while the gate is held; the old assertion held even if both callers entered together. `MintSerializer` singleton registration also asserted. |
+
+Documentation corrections, each tested rather than assumed:
+
+- **Model validation ordering** — correct, `[ApiController]` validation precedes the
+  action. Section 3 above now reflects it.
+- **`grep "$MINTED_TOKEN"` in TESTING.md** — correct, fixed to `grep -F --`.
+- **Plugin-directory removal** — the table was wrong, and worse than reported: a mint
+  after `rm -rf` of the plugin directory returned **200 and created a device**, because
+  `PluginManager` keeps an in-memory record still marked `Active`. Table corrected;
+  disabling via the API remains the supported immediate revocation path.
+- **CodeQL on `master`** — correct, now `main`.
+
+Two notes back:
+
+- The stale-gate window (#1) is proven by unit tests rather than live ones, because
+  making a real `AuthenticateDirect` slow enough to queue behind is not something the
+  smoke harness can arrange deterministically.
+- The rate limiter is deliberately *not* re-checked after the wait: it is an abuse
+  bound, not a kill switch, and a request that already holds a permit has not consumed
+  a second one.
