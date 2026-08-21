@@ -1,12 +1,12 @@
 using System;
 using System.Net.Mime;
-using System.Security;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SessionProvisioning.Security;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Plugins;
 using Microsoft.AspNetCore.Authorization;
@@ -154,7 +154,10 @@ public class SessionProvisioningController : ControllerBase
         }
         catch (SecurityException)
         {
-            // Device access restrictions or the target user's MaxActiveSessions limit.
+            // MediaBrowser.Controller.Net.SecurityException, NOT System.Security's:
+            // device access restrictions or the target user's MaxActiveSessions limit.
+            // Catching the wrong type let this escape to Jellyfin's ExceptionMiddleware,
+            // which answered 403 -- indistinguishable from a bad provisioning secret.
             _logger.LogWarning(
                 "Session provisioning refused by Jellyfin for user {UserId} device {DeviceId}",
                 request.UserId,

@@ -241,6 +241,34 @@ check "secret hash never logged"            "0" "$(echo "$LOGS" | grep -c "$HASH
 check "audit line present"                  "yes" \
     "$(echo "$LOGS" | grep -q "Session provisioning succeeded user=" && echo yes || echo no)"
 
+echo "==> Jellyfin's own refusals map to 409"
+# Cap the target user at one session, then mint twice for different devices. Jellyfin
+# raises MediaBrowser.Controller.Net.SecurityException, which must surface as 409 --
+# catching System.Security.SecurityException instead let it escape to Jellyfin's
+# ExceptionMiddleware, which answered 403 and looked exactly like a bad secret.
+CAP_USER=$(curl -s "${RETRY[@]}" -X POST "$JF/Users/New" -H "$(ah "$ADMIN_TOKEN")" -H 'Content-Type: application/json' \
+    -d '{"Name":"capped","Password":"capped-pw-1234"}' | jq_get '["Id"]')
+CAP_POLICY=$(curl -s "$JF/Users/$CAP_USER" -H "$(ah "$ADMIN_TOKEN")" \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin)["Policy"]; p["MaxActiveSessions"]=1; print(json.dumps(p))')
+curl -s "${RETRY[@]}" -X POST "$JF/Users/$CAP_USER/Policy" -H "$(ah "$ADMIN_TOKEN")" \
+    -H 'Content-Type: application/json' -d "$CAP_POLICY" >/dev/null
+check "first session within cap"            "200" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$CAP_USER" capped-dev-1)")"
+check "session cap exceeded -> 409"         "409" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$CAP_USER" capped-dev-2)")"
+
+DEV_POLICY=$(curl -s "$JF/Users/$CAP_USER" -H "$(ah "$ADMIN_TOKEN")" \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin)["Policy"]; p["MaxActiveSessions"]=0; p["EnableAllDevices"]=False; p["EnabledDevices"]=["some-other-device"]; print(json.dumps(p))')
+curl -s "${RETRY[@]}" -X POST "$JF/Users/$CAP_USER/Policy" -H "$(ah "$ADMIN_TOKEN")" \
+    -H 'Content-Type: application/json' -d "$DEV_POLICY" >/dev/null
+check "device restriction -> 409"           "409" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$CAP_USER" capped-dev-3)")"
+check "409 logged by the plugin, not the middleware" "yes" \
+    "$(docker logs "$CONTAINER" 2>&1 | grep -q "Session provisioning refused by Jellyfin" && echo yes || echo no)"
+
+echo "==> Unicode device names"
+check "emoji device name accepted"          "200" \
+    "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" '{"userId":"'"$BOB_ID"'","deviceId":"emoji-dev","deviceName":"Living Room \ud83d\udcfa","appVersion":"3.0.0"}')"
+check "bidi override still rejected"        "400" \
+    "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" '{"userId":"'"$BOB_ID"'","deviceId":"bidi-dev","deviceName":"Living \u202eRoom","appVersion":"3.0.0"}')"
+
 echo "==> Lifecycle: secret availability"
 # The hash is re-read per request, so removing the file must disable minting with no
 # restart, and restoring it must bring the capability straight back.

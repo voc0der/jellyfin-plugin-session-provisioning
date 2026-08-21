@@ -298,11 +298,14 @@ security-sensitive endpoint. The mechanism, in order:
 
 Consequences, all verified live:
 
-| Event | Endpoint before restart | After restart |
-|---|---|---|
-| plugin instance fails to construct (`Malfunctioned`) | route still served | route gone |
-| plugin disabled via `POST /Plugins/{id}/{version}/Disable` | route still served | route gone |
-| plugin directory removed | route still served | route gone |
+| Event | Route mapped before restart | Mint before restart | After restart |
+|---|---|---|---|
+| plugin instance fails to construct (`Malfunctioned`) | yes | refused by the gate below | route gone |
+| plugin disabled via `POST /Plugins/{id}/{version}/Disable` | yes | refused by the gate below | route gone |
+| plugin directory removed | yes | refused by the gate below | route gone |
+
+The route stays mapped in every "before restart" case — ASP.NET has no way to drop it —
+so the plugin has to answer for itself.
 
 Disabling deserves a closer look. `PluginManager.DisablePlugin` writes `Disabled` to the
 manifest on disk, then `ProcessAlternative` sets the **in-memory** status to

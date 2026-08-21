@@ -15,10 +15,17 @@ public class MintSessionRequest
     private const string DeviceIdPattern = "^[A-Za-z0-9._:-]+$";
 
     /// <summary>
-    /// Any character other than a control/format character. Keeps newlines and other
-    /// control characters out of a value that is displayed in Jellyfin's UI and logs.
+    /// Any character other than a control or format character. Keeps newlines, other
+    /// control characters, and bidi/format overrides out of a value that is displayed
+    /// in Jellyfin's UI and written to logs.
     /// </summary>
-    private const string NoControlCharactersPattern = @"^[^\p{C}]+$";
+    /// <remarks>
+    /// Deliberately <c>Cc</c> and <c>Cf</c> rather than the whole <c>C</c> group:
+    /// <c>C</c> also covers <c>Cs</c> (surrogates), and every non-BMP character is a
+    /// surrogate pair in UTF-16, so <c>[^\p{C}]</c> rejects any device name containing
+    /// an emoji or other astral-plane character.
+    /// </remarks>
+    private const string NoControlCharactersPattern = @"^[^\p{Cc}\p{Cf}]+$";
 
     /// <summary>
     /// Version-like strings only.
