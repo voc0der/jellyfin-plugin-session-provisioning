@@ -18,6 +18,7 @@ if every test passes.
 - the plugin stores no secret and exposes no settings UI
 - no usable secret hash configured -> minting is impossible
 - plugin disabled or removed -> minting is impossible
+- minting is rate limited regardless of how well-credentialed the caller is
 ```
 
 ## The two gates
@@ -144,6 +145,21 @@ session machinery, which is not a trade worth making.
 
 `scripts/smoke-test.sh` asserts that every occurrence of a minted token in the logs
 comes from that upstream line, and that the plugin contributes none.
+
+## Rate limiting
+
+The endpoint caps how often it will do work, at 120 requests per minute
+process-wide (`MintRateLimiter`), answering 429 with a `Retry-After` header beyond
+that. The limiter runs **before** the secret is examined, so an elevated caller cannot
+use the endpoint to guess the provisioning secret at speed or to drive Jellyfin's
+session machinery in a loop; a correct secret does not bypass it.
+
+The limit is deliberately generous — provisioning is rare, and enrolling a batch of
+managed installations must not trip it — and the window is process-local, so it resets
+when Jellyfin restarts. It is an abuse bound, not a quota. A plugin cannot add
+middleware to Jellyfin's pipeline, so this uses `System.Threading.RateLimiting` from
+the ASP.NET Core shared framework directly rather than the MVC rate-limiting
+middleware.
 
 ## Lifecycle: when minting must be impossible
 

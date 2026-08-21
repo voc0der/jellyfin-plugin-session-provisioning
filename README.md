@@ -102,6 +102,9 @@ curl -X POST "$JELLYFIN_URL/SessionProvisioning/Mint" \
 }
 ```
 
+Provisioning is rate limited to 120 requests per minute, answering 429 with
+`Retry-After` beyond that.
+
 The token is returned once and is a normal Jellyfin session token carrying that user's
 existing permissions. Use one stable `deviceId` per managed installation: re-minting the
 same user + `deviceId` rotates the token instead of piling up device entries.

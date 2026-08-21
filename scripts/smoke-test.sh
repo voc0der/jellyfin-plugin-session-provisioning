@@ -24,6 +24,7 @@ KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RL_LIMIT=$(grep -oE 'DefaultPermitLimit = [0-9]+' "$(dirname "${BASH_SOURCE[0]}")/../Jellyfin.Plugin.SessionProvisioning/Security/MintRateLimiter.cs" | grep -oE '[0-9]+')
 WORK="$(mktemp -d)"
 PASS=0
 FAIL=0
@@ -123,6 +124,11 @@ wait_for_http
 
 LOADED=$(wait_for_log "Loaded plugin: Session Provisioning" 30 && echo yes || echo no)
 check "plugin loads on ${JELLYFIN_VERSION}" "yes" "$LOADED"
+# The dashboard reports the ASSEMBLY version; build.yaml drives the manifest. Leaving
+# Directory.Build.props at the template's 0.0.0.0 makes them disagree.
+MANIFEST_VERSION=$(grep '^version:' "$REPO_ROOT/build.yaml" | cut -d'"' -f2)
+check "assembly version matches build.yaml"  "$MANIFEST_VERSION" \
+    "$(docker logs "$CONTAINER" 2>&1 | grep -o "Loaded plugin: Session Provisioning [0-9.]*" | tail -1 | awk '{print $NF}')"
 
 echo "==> Preparing fixtures"
 CLIENT_AUTH='MediaBrowser Client="smoketest", Device="smoketest", DeviceId="smoketest-runner", Version="1.0.0"'
@@ -160,13 +166,23 @@ curl -s -X POST "$JF/Auth/Keys?app=provisioner" -H "$(ah "$ADMIN_TOKEN")" >/dev/
 API_KEY=$(curl -s "$JF/Auth/Keys" -H "$(ah "$ADMIN_TOKEN")" | jq_get '["Items"][0]["AccessToken"]')
 
 mint() { # auth-header secret body -> prints status code, body in $WORK/last.json
-    # RETRY only covers connection-level failures; a 4xx is a completed transfer and
-    # is never retried, so the matrix semantics are unchanged.
-    local args=(-s "${RETRY[@]}" -o "$WORK/last.json" -w '%{http_code}' -X POST "$JF/SessionProvisioning/Mint" -H 'Content-Type: application/json')
+    local args=(-s -o "$WORK/last.json" -w '%{http_code}' -X POST "$JF/SessionProvisioning/Mint" -H 'Content-Type: application/json')
     [ -n "$1" ] && args+=(-H "$1")
     [ -n "$2" ] && args+=(-H "X-Session-Provisioning-Secret: $2")
     args+=(-d "$3")
-    curl "${args[@]}"
+
+    # Deliberately not curl --retry: that treats 429 as a transient error and retries
+    # it away, which would hide exactly the rate-limiting behaviour under test. Retry
+    # only when there was no HTTP response at all (server still coming up).
+    local status attempt=0
+    while :; do
+        status=$(curl "${args[@]}" || true)
+        [ "$status" != "000" ] && [ "$status" != "503" ] && break
+        attempt=$((attempt + 1))
+        [ "$attempt" -ge 10 ] && break
+        sleep 1
+    done
+    printf '%s' "$status"
 }
 tokenauth() { echo "Authorization: MediaBrowser Token=\"$1\""; }
 body() { echo "{\"userId\":\"$1\",\"deviceId\":\"$2\",\"deviceName\":\"${3-Living Room MPV Shim}\",\"appVersion\":\"${4-3.0.0}\"}"; }
@@ -232,12 +248,12 @@ LOGS=$(docker logs "$CONTAINER" 2>&1)
 # invalidating, in SessionManager.Logout ("Logging out access token {0}"), which our
 # revoke and re-mint paths both trigger -- so assert that every occurrence comes from
 # that upstream line and none from plugin activity.
-TOKEN_HITS=$(echo "$LOGS" | grep -c "$REMINTED_TOKEN" || true)
-TOKEN_UPSTREAM=$(echo "$LOGS" | grep "$REMINTED_TOKEN" | grep -c "Logging out access token" || true)
+TOKEN_HITS=$(echo "$LOGS" | grep -cF -- "$REMINTED_TOKEN" || true)
+TOKEN_UPSTREAM=$(echo "$LOGS" | grep -F -- "$REMINTED_TOKEN" | grep -c "Logging out access token" || true)
 check "token only logged by upstream logout" "$TOKEN_HITS" "$TOKEN_UPSTREAM"
-check "token not logged before revocation"  "0" "$(echo "$LOGS" | grep "$REMINTED_TOKEN" | grep -vc "Logging out access token" || true)"
-check "provisioning secret never logged"    "0" "$(echo "$LOGS" | grep -c "$SECRET" || true)"
-check "secret hash never logged"            "0" "$(echo "$LOGS" | grep -c "$HASH" || true)"
+check "token not logged before revocation"  "0" "$(echo "$LOGS" | grep -F -- "$REMINTED_TOKEN" | grep -vc "Logging out access token" || true)"
+check "provisioning secret never logged"    "0" "$(echo "$LOGS" | grep -cF -- "$SECRET" || true)"
+check "secret hash never logged"            "0" "$(echo "$LOGS" | grep -cF -- "$HASH" || true)"
 check "audit line present"                  "yes" \
     "$(echo "$LOGS" | grep -q "Session provisioning succeeded user=" && echo yes || echo no)"
 
@@ -297,6 +313,43 @@ curl -s "${RETRY[@]}" -X POST "$JF/Plugins/$PLUGIN_GUID/$PLUGIN_VERSION/Enable" 
 docker stop "$CONTAINER" >/dev/null && docker start "$CONTAINER" >/dev/null
 wait_for_http
 check "re-enabled -> mint works again"      "200" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-lifecycle-3)")"
+
+echo "==> Rate limiting"
+# Wrong-secret requests are cheap and mint nothing, so they are the safe way to fill
+# the window. The limiter sits ahead of the secret check precisely so that this kind
+# of flood is bounded.
+#
+# Fire them in parallel: sent one at a time, filling a 120-permit window can take
+# longer than the window itself on a server that is still running startup tasks, and
+# the permits replenish underneath the test.
+# A generated request script keeps the quoting sane; curl config files need every
+# embedded quote escaped, and the JSON body is full of them.
+cat > "$WORK/rl-request.sh" <<REQ
+#!/usr/bin/env bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "$JF/SessionProvisioning/Mint" \\
+    -H $(printf %q "$(ah "$ADMIN_TOKEN")") \\
+    -H 'X-Session-Provisioning-Secret: wrong-secret' \\
+    -H 'Content-Type: application/json' \\
+    -d $(printf %q "$(body "$BOB_ID" rl-probe)")
+REQ
+chmod +x "$WORK/rl-request.sh"
+seq 1 $((RL_LIMIT + 20)) | xargs -P 8 -I{} "$WORK/rl-request.sh" > "$WORK/rl-status.txt" 2>/dev/null || true
+check "flood is rate limited"               "yes" \
+    "$([ "$(grep -c '^429' "$WORK/rl-status.txt" || true)" -gt 0 ] && echo yes || echo no)"
+check "flood was not blocked wholesale"     "yes" \
+    "$([ "$(grep -c '^403' "$WORK/rl-status.txt" || true)" -gt 0 ] && echo yes || echo no)"
+
+# A correct secret must not bypass the limiter, and the refusal must say how long to wait.
+curl -s -D "$WORK/rl-headers.txt" -o /dev/null -w '%{http_code}' -X POST "$JF/SessionProvisioning/Mint" \
+    -H "$(ah "$ADMIN_TOKEN")" -H "X-Session-Provisioning-Secret: $SECRET" \
+    -H 'Content-Type: application/json' -d "$(body "$BOB_ID" rl-probe-2)" > "$WORK/rl-valid.txt"
+check "valid secret does not bypass limiter" "429" "$(cat "$WORK/rl-valid.txt")"
+check "429 carries Retry-After"             "yes" \
+    "$(grep -qi '^retry-after:' "$WORK/rl-headers.txt" && echo yes || echo no)"
+
+docker stop "$CONTAINER" >/dev/null && docker start "$CONTAINER" >/dev/null
+wait_for_http
+check "restart clears the window"           "200" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" rl-after-restart)")"
 
 echo "==> Lifecycle: plugin removed"
 docker exec "$CONTAINER" rm -rf "/config/plugins/$PLUGIN_DIR_NAME"

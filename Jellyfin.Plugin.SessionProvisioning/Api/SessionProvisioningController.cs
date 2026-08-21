@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net.Mime;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SessionProvisioning.Security;
@@ -42,6 +43,12 @@ public class SessionProvisioningController : ControllerBase
     /// </summary>
     private static readonly ProvisioningSecretSource SecretSource = new();
 
+    /// <summary>
+    /// Caps how fast this endpoint will do work. Process-wide, so a single shared
+    /// instance is the point; it lives for the life of the server.
+    /// </summary>
+    private static readonly MintRateLimiter RateLimiter = new();
+
     private readonly ISessionManager _sessionManager;
     private readonly IUserManager _userManager;
     private readonly IPluginManager _pluginManager;
@@ -76,6 +83,7 @@ public class SessionProvisioningController : ControllerBase
     /// <response code="403">Caller is not elevated, or the provisioning secret is missing or wrong.</response>
     /// <response code="404">The requested user does not exist.</response>
     /// <response code="409">Jellyfin refused the session for the target user.</response>
+    /// <response code="429">Too many provisioning requests; retry after the indicated delay.</response>
     /// <returns>The provisioned session credential.</returns>
     [HttpPost("Mint")]
     [ProducesResponseType(typeof(MintSessionResponse), StatusCodes.Status200OK)]
@@ -84,6 +92,7 @@ public class SessionProvisioningController : ControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult<MintSessionResponse>> MintSession([FromBody] MintSessionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -97,6 +106,17 @@ public class SessionProvisioningController : ControllerBase
         {
             _logger.LogWarning("Session provisioning rejected: the plugin is not active");
             return NotFound();
+        }
+
+        // Rate limit before the secret is examined, so an elevated caller cannot use
+        // this endpoint to guess the secret quickly or to drive Jellyfin's session
+        // machinery in a loop.
+        if (!RateLimiter.TryAcquire(out var retryAfter))
+        {
+            Response.Headers.RetryAfter = ((int)Math.Ceiling(retryAfter.TotalSeconds))
+                .ToString(CultureInfo.InvariantCulture);
+            _logger.LogWarning("Session provisioning rejected: rate limit exceeded");
+            return StatusCode(StatusCodes.Status429TooManyRequests);
         }
 
         // Gate two. Jellyfin's elevation policy is gate one, applied by [Authorize]

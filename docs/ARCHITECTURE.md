@@ -58,6 +58,13 @@ The `App` identity is controlled by the plugin (`Jellyfin MPV Shim`) rather than
 from the request. `AuthenticationRequest` permits arbitrary `App` values; exposing that
 would turn this into a generic client-impersonation API.
 
+`RemoteEndPoint` on the created session is the **provisioning caller's** address, not
+the device's — the device has not connected yet. Jellyfin replaces it via
+`LogSessionActivity` the first time the client actually uses the token.
+
+Rate limiting: 120 requests per minute process-wide, applied before the secret check,
+answering 429 with `Retry-After`. See `SECURITY.md`.
+
 Response returns the access token exactly once:
 
 ```json
