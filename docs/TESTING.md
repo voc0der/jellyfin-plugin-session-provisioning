@@ -198,6 +198,16 @@ After a successful mint:
    re-mint: Jellyfin's own `SessionManager.Logout` logs the token it is invalidating
    (see `docs/SECURITY.md`). Filter that upstream line out and assert on the rest.
 
+   Two rules for any log-leak check, learned the hard way:
+
+   - **Use `grep -F -- "$PATTERN"`.** A base64url secret can begin with `-`, and
+     `grep -c "$SECRET"` then parses the secret as options: it printed nothing whether
+     or not the secret was in the log, so a genuine leak read as a pass.
+   - **Prove the search works before trusting a negative result.** The suite mints a
+     canary device whose ID starts with `-`, then asserts the same search finds it in
+     the log. Without that positive control, "the secret never appears" is
+     indistinguishable from "the search is broken".
+
 ## Teardown
 
 ```sh

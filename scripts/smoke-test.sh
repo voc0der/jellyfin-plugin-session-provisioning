@@ -40,6 +40,13 @@ cleanup() {
 trap cleanup EXIT
 
 check() { # label expected actual
+    if [ -z "$3" ]; then
+        # An empty result means the check itself failed to run -- a broken assertion,
+        # not a passing one. Never let that read as success.
+        printf '  \033[31mFAIL\033[0m  %-52s produced no result (assertion broken)\n' "$1"
+        FAIL=$((FAIL + 1))
+        return
+    fi
     if [ "$2" = "$3" ]; then
         printf '  \033[32mPASS\033[0m  %-52s %s\n' "$1" "$3"
         PASS=$((PASS + 1))
@@ -243,7 +250,16 @@ curl -s -X DELETE "$JF/Devices?id=bob-livingroom-1" -H "$(ah "$ADMIN_TOKEN")" >/
 check "revoked token stops working"         "401" "$(curl -s -o /dev/null -w '%{http_code}' "$JF/Users/Me" -H "$(tokenauth "$REMINTED_TOKEN")")"
 
 echo "==> Secrets stay out of the logs"
+# Positive control first. "The secret never appears in the logs" only means something
+# if the search would have found it. The canary deviceId deliberately starts with '-',
+# the exact shape that made grep parse the pattern as an option and report nothing --
+# a leaked secret would then have been reported as absent.
+CANARY="-canary-${RANDOM}${RANDOM}"
+check "canary mint accepted"                "200" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" "$CANARY")")"
 LOGS=$(docker logs "$CONTAINER" 2>&1)
+CANARY_HITS=$(echo "$LOGS" | grep -cF -- "$CANARY" || true)
+check "log search can find a planted string" "yes" \
+    "$([ "${CANARY_HITS:-0}" -ge 1 ] && echo yes || echo no)"
 # The plugin must never log a token. Jellyfin itself does log the token it is
 # invalidating, in SessionManager.Logout ("Logging out access token {0}"), which our
 # revoke and re-mint paths both trigger -- so assert that every occurrence comes from
