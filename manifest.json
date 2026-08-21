@@ -6,6 +6,16 @@
     "description": "Lets an authenticated Jellyfin administrator, subject to an additional provisioning secret, create a normal device session for an existing Jellyfin user. Built for managed client deployment, so a client can ship already enrolled without the user's password, an SSO browser flow, or Quick Connect. It does not provide SSO, create users, or disable Jellyfin authentication, and it stores nothing: the secret's hash comes from the server's environment, and Jellyfin issues and revokes the session itself.",
     "category": "General",
     "owner": "voc0der",
-    "versions": []
+    "versions": [
+      {
+        "version": "1.0.0.1",
+        "changelog": "## What's Changed\n\n- chore: release pipeline, plugin catalogue, and a README for humans (5740e5a)\n- docs: record round-2 review responses in the review handoff (815b04c)\n- fix: re-check kill switches after the serializer wait, and repair vacuous assertions (5c6e66f)\n- fix: serialize minting, and make the controller injectable and unit-testable (65329e1)\n- tests: give the log-leak assertions a positive control (1290339)\n- fix: pin the assembly version to build.yaml, and rate limit the mint endpoint (e355d83)\n- fix: catch Jellyfin's SecurityException so refusals surface as 409 (1d7f1f3)\n- security: refuse minting unless the plugin is active, and document the lifecycle (2165ca4)\n- docs: match the stateless design and record verified upstream behavior (ce69899)\n- chore: relicense under MIT (voc0der) (fb7fc90)\n- tests: add end-to-end security smoke suite (30647d7)\n- api: add admin-protected mint endpoint backed by Jellyfin's session manager (856f69c)\n- security: source the provisioning secret hash from the environment (31a79f0)\n- security: add provisioning-secret verifier and configuration plumbing (1f02838)\n- docs: record verified 10.11.11 session API behavior and security invariants (36d00c4)\n- template: scaffold from official Jellyfin plugin template, pinned to 10.11.11 (1b7266e)\n\n**Full Changelog**: https://github.com/voc0der/jellyfin-plugin-session-provisioning/compare/1.0.0.0...1.0.0.1\n",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/voc0der/jellyfin-plugin-session-provisioning/releases/download/1.0.0.1/SessionProvisioning_1.0.0.1_jellyfin-10.11.11.zip",
+        "checksum": "7688e02b9bc4e7ae0e3cee216982a99a",
+        "timestamp": "2026-08-21T16:38:15Z"
+      }
+    ],
+    "imageUrl": "https://raw.githubusercontent.com/voc0der/jellyfin-plugin-session-provisioning/main/icon.png"
   }
 ]
