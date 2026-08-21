@@ -207,15 +207,79 @@ administration (dashboard device list, or the `/Devices` API), which deletes the
 record and its access token. The plugin implements no revocation of its own — it must
 not, or it would be duplicating Jellyfin state.
 
-## Configuration model
+## Configuration model: none
 
-```csharp
-public string? ProvisioningSecretHash { get; set; }   // SHA-256 of the secret, hex
+The plugin holds **no state**. There is no `PluginConfiguration`, no dashboard page,
+and no stored secret — nothing about it is settable through Jellyfin's web UI.
+
+The one value it needs, the SHA-256 hash of the provisioning secret, comes from the
+deployment environment:
+
+```text
+SESSION_PROVISIONING_SECRET_HASH        hex-encoded SHA-256 of the secret
+SESSION_PROVISIONING_SECRET_HASH_FILE   path to a file containing that hash
 ```
 
-The admin configures the **hash**, never the plaintext. The plugin therefore never
-stores, displays, or recovers a secret. See `SECURITY.md` for the rationale and the
-generation recipe.
+The file form wins if both are set, and the value is re-read on every request, so
+rotating a mounted file takes effect without restarting Jellyfin. Anything missing,
+blank, or unreadable disables minting (see `SECURITY.md`).
+
+Neither name carries a `JELLYFIN_` prefix, deliberately — see §10 below.
+
+### 9. Jellyfin logs the tokens it invalidates
+
+```csharp
+// Emby.Server.Implementations/Session/SessionManager.cs (v10.11.11)
+public async Task Logout(Device device)
+{
+    CheckDisposed();
+    _logger.LogInformation("Logging out access token {0}", device.AccessToken);
+```
+
+Jellyfin writes an access token in plaintext to its own log, at INFO, whenever a device
+is logged out. Provisioning hits this on two paths: an admin revoking a device, and
+re-minting an existing user+device pair (`GetAuthorizationToken` logs out the previous
+device first). The token is being invalidated at that moment, which limits the damage,
+but Jellyfin server logs must still be treated as credential-bearing.
+
+This is upstream behavior on the path the plugin is required to use. The plugin itself
+never logs a token, and `scripts/smoke-test.sh` asserts that every appearance of a
+minted token in the logs comes from this upstream line and none from plugin activity.
+
+### 10. Jellyfin echoes JELLYFIN_-prefixed environment variables into the log
+
+```csharp
+// Jellyfin.Server/Helpers/StartupHelpers.cs (v10.11.11)
+private static readonly string[] _relevantEnvVarPrefixes = { "JELLYFIN_", "DOTNET_", "ASPNETCORE_" };
+...
+logger.LogInformation("Environment Variables: {EnvVars}", relevantEnvVars);
+```
+
+Every variable starting with one of those prefixes is printed at startup, with its
+value. A variable named `JELLYFIN_SESSION_PROVISIONING_SECRET_HASH` would therefore put
+the hash in the server log on every boot — verified by observing exactly that. Hence
+the unprefixed names above, and hence the preference for the `_FILE` form, where only
+the path is ever logged.
+
+### 11. A configuration-less plugin must set its own assembly attributes
+
+`BasePlugin.Version`, `AssemblyFilePath`, and `DataFolderPath` are populated only by
+`SetAttributes`, which Jellyfin's generic `BasePlugin<TConfigurationType>` calls from
+its constructor. A plugin deriving from the non-generic `BasePlugin` — as this one does,
+having no configuration — must do that itself, or
+`PluginManager.CreatePluginInstance` throws `NullReferenceException` on
+`instance.Version` and marks the plugin `Malfunctioned`:
+
+```text
+Error creating Jellyfin.Plugin.SessionProvisioning.Plugin
+System.NullReferenceException: Object reference not set to an instance of an object.
+   at Emby.Server.Implementations.Plugins.PluginManager.CreatePluginInstance(Type type)
+Plugin /config/plugins/Session Provisioning_1.0.0.0 has been disabled.
+```
+
+The controller still answers in that state, because ASP.NET discovers controllers from
+the loaded assembly regardless — so "the endpoint works" is not evidence the plugin
+loaded. Assert on `Loaded plugin: Session Provisioning` in the log instead.
 
 ## Device-ID semantics
 

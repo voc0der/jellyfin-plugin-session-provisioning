@@ -15,6 +15,7 @@ if every test passes.
 - target privileges are whatever Jellyfin already assigns that target user
 - caller/admin authority and target-user privilege are separate concepts
 - provisioning credentials never enter generated client installers
+- the plugin stores no secret and exposes no settings UI
 ```
 
 ## The two gates
@@ -72,11 +73,29 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
 
 ### Storage
 
-Only `SHA-256(secret)` is stored, in plugin configuration, hex-encoded:
+The plugin stores nothing. Only `SHA-256(secret)`, hex-encoded, is supplied by the
+deployment environment:
 
 ```sh
 printf '%s' "$SECRET" | sha256sum
 ```
+
+```text
+SESSION_PROVISIONING_SECRET_HASH        the hash itself
+SESSION_PROVISIONING_SECRET_HASH_FILE   path to a root-owned or mounted file holding it
+```
+
+The file form takes precedence when both are set, and is the preferred one: the file
+can be root-owned with restrictive permissions, and only its *path* ever reaches a log.
+
+There is no plugin configuration and no dashboard page, so the secret is never typed
+into, rendered by, or persisted through Jellyfin's web UI, and no admin session can
+read it back out of the server.
+
+**Do not name these variables with a `JELLYFIN_` prefix.** Jellyfin logs every
+environment variable beginning with `JELLYFIN_`, `DOTNET_`, or `ASPNETCORE_`, with its
+value, on every startup (`StartupHelpers.LogEnvironmentInfo`). A prefixed name puts the
+hash in the server log at each boot.
 
 Plain SHA-256 is sufficient **because the secret is a uniformly random 256-bit value** —
 offline guessing is not a realistic attack against that input. If human-chosen
@@ -107,6 +126,22 @@ Session provisioning succeeded user=<guid> device=<device-id>
 
 Failures log the reason category (unauthorized / bad secret / unknown user / invalid
 input) and nothing that would help an attacker calibrate a guess.
+
+### Upstream caveat: Jellyfin logs tokens it invalidates
+
+`SessionManager.Logout(Device)` writes the access token in plaintext at INFO
+("Logging out access token {0}"). Provisioning reaches it whenever an admin revokes a
+device and whenever an existing user+device pair is re-minted, since Jellyfin logs out
+the previous device before issuing a new token.
+
+The token logged there is being invalidated at that moment, so the exposure is bounded,
+but the consequence stands: **Jellyfin server logs are credential-bearing and must be
+handled accordingly** — restricted permissions, and scrubbed before being attached to
+bug reports. Nothing the plugin can do prevents this short of not using Jellyfin's own
+session machinery, which is not a trade worth making.
+
+`scripts/smoke-test.sh` asserts that every occurrence of a minted token in the logs
+comes from that upstream line, and that the plugin contributes none.
 
 ## Network defense in depth
 

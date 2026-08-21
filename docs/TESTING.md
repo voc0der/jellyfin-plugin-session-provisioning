@@ -3,6 +3,20 @@
 Never commit real API keys, access tokens, or provisioning secrets to this file. Use
 placeholders and environment variables.
 
+## The short version
+
+```sh
+./scripts/smoke-test.sh          # builds, deploys to a disposable server, runs everything
+./scripts/smoke-test.sh --keep   # same, but leaves the container up for poking
+```
+
+That script is the executable form of everything below: it generates a fresh secret,
+starts a disposable Jellyfin, installs the plugin, creates an admin/normal/second-admin
+user and an API key, runs the full authorization matrix and negative-input cases,
+verifies the minted session, rotates and revokes it, and greps the logs for leaks. It
+exits non-zero if any check fails. Run it for any change touching auth, the secret
+gate, or session creation.
+
 ## Build
 
 ```sh
@@ -29,8 +43,16 @@ Verified working recipe against the pinned target version.
 ```sh
 docker pull jellyfin/jellyfin:10.11.11
 docker rm -f jf-sp-test 2>/dev/null
-docker run -d --name jf-sp-test -p 8096:8096 jellyfin/jellyfin:10.11.11
+SECRET="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+HASH="$(printf '%s' "$SECRET" | sha256sum | cut -d' ' -f1)"
+docker run -d --name jf-sp-test -p 8096:8096 \
+    -e "SESSION_PROVISIONING_SECRET_HASH=$HASH" \
+    jellyfin/jellyfin:10.11.11
 ```
+
+The plugin has no configuration page; the hash is supplied by the environment. Do not
+rename that variable to something starting with `JELLYFIN_`, or Jellyfin will print the
+hash in its startup log.
 
 ### Install the plugin
 
@@ -72,14 +94,19 @@ so the bind mount silently lands on an empty directory and the plugin never appe
 docker logs jf-sp-test 2>&1 | grep -i "session provisioning"
 ```
 
-Expected:
+Expected — **both** lines matter:
 
 ```text
 Loaded assembly Jellyfin.Plugin.SessionProvisioning, Version=... from /config/plugins/Session Provisioning_1.0.0.0/Jellyfin.Plugin.SessionProvisioning.dll
 Loaded plugin: Session Provisioning 1.0.0.0
 ```
 
-A `NotSupported` status here means `targetAbi` / package versions do not match the
+`Loaded assembly` without `Loaded plugin` means the plugin instance failed to
+construct — look for `Error creating ...Plugin` and `has been disabled` just after it.
+The endpoint still answers in that state, because ASP.NET finds controllers in any
+loaded assembly, so a working `curl` is **not** evidence that the plugin loaded.
+
+A `NotSupported` status instead means `targetAbi` / package versions do not match the
 server version.
 
 ### Server sanity check
@@ -90,8 +117,9 @@ curl -s http://localhost:8096/System/Info/Public
 
 ## Test-server fixtures
 
-To be filled in as the smoke tests are built out: completing the startup wizard,
-creating an admin user, a normal user, and an API key, then exporting:
+`scripts/smoke-test.sh` builds these itself. To do it by hand, complete the startup
+wizard (`POST /Startup/Configuration`, `POST /Startup/User`, `POST /Startup/RemoteAccess`,
+`POST /Startup/Complete`), then authenticate and create users:
 
 ```sh
 export JF_URL=http://localhost:8096
@@ -101,6 +129,16 @@ export JF_API_KEY=...            # never commit
 export SP_SECRET=...             # never commit
 export TARGET_USER_ID=...
 ```
+
+Three things that will otherwise cost an afternoon:
+
+- Kestrel answers `/System/Info/Public` before the rest of the pipeline is ready, so
+  the first wizard call needs `curl --retry`.
+- Use `docker stop` + `docker start`, not `docker restart`: the old process can answer
+  a readiness probe while it is still shutting down.
+- When exercising a **minted** token, send only
+  `Authorization: MediaBrowser Token="..."`. Adding `Device=`/`Client=` fields makes
+  Jellyfin rename the provisioned device to whatever the test runner claims to be.
 
 ## Security smoke-test matrix
 
@@ -150,11 +188,15 @@ After a successful mint:
    (`GET /Devices`, dashboard device list).
 4. Revoke it through Jellyfin's normal mechanism (`DELETE /Devices?id=<deviceId>`).
 5. Confirm the token no longer authenticates (401).
-6. Prove the token never reached the logs:
+6. Prove the plugin never wrote the token to the logs:
 
    ```sh
-   docker logs jf-sp-test 2>&1 | grep -c "$MINTED_TOKEN"   # must be 0
+   docker logs jf-sp-test 2>&1 | grep "$MINTED_TOKEN" | grep -v "Logging out access token"
    ```
+
+   Must be empty. A bare `grep -c` will **not** be zero after a revocation or a
+   re-mint: Jellyfin's own `SessionManager.Logout` logs the token it is invalidating
+   (see `docs/SECURITY.md`). Filter that upstream line out and assert on the rest.
 
 ## Teardown
 
