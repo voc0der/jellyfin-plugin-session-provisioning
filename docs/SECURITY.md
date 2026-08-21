@@ -19,6 +19,7 @@ if every test passes.
 - no usable secret hash configured -> minting is impossible
 - plugin disabled or removed -> minting is impossible
 - minting is rate limited regardless of how well-credentialed the caller is
+- concurrent mints for one device leave one credential, never several
 ```
 
 ## The two gates
@@ -160,6 +161,19 @@ when Jellyfin restarts. It is an abuse bound, not a quota. A plugin cannot add
 middleware to Jellyfin's pipeline, so this uses `System.Threading.RateLimiting` from
 the ASP.NET Core shared framework directly rather than the MVC rate-limiting
 middleware.
+
+## Concurrency
+
+Minting is serialized: one at a time, process-wide, with a 30-second wait before a
+caller gets 503.
+
+This is not a performance choice. Jellyfin replaces a device's token by reading the
+matching devices, logging them out, and creating a new one, with no lock — so
+concurrent mints for the same user and device each delete the original set and add
+their own row. Eight simultaneous requests were measured producing four device rows
+and **four simultaneously valid tokens** for one logical device, plus a 500. An
+administrator revoking that device would have removed one row and left the rest
+working. See `ARCHITECTURE.md` §5.
 
 ## Lifecycle: when minting must be impossible
 

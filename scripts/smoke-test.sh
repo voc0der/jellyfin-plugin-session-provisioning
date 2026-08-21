@@ -245,6 +245,42 @@ check "new token differs"                   "different" "$([ "$REMINTED_TOKEN" !
 check "old token no longer authenticates"   "401" "$(curl -s -o /dev/null -w '%{http_code}' "$JF/Users/Me" -H "$(tokenauth "$MINTED_TOKEN")")"
 check "device count unchanged by re-mint"   "$DEVICES_AFTER" "$(curl -s "$JF/Devices" -H "$(ah "$ADMIN_TOKEN")" | jq_get '["Items"].__len__()')"
 
+echo "==> Concurrent mints for the same device"
+# Jellyfin's GetAuthorizationToken reads the matching devices, logs them out, then
+# creates a new one, with no lock. Racing calls each delete the old set and add their
+# own row: before the plugin serialized minting, eight simultaneous requests produced
+# four device rows, four simultaneously valid tokens, and a 500.
+cat > "$WORK/race-request.sh" <<REQ
+#!/usr/bin/env bash
+curl -s -o "$WORK/race-\$1.json" -w '%{http_code}\n' -X POST "$JF/SessionProvisioning/Mint" \\
+    -H $(printf %q "$(ah "$ADMIN_TOKEN")") \\
+    -H $(printf %q "X-Session-Provisioning-Secret: $SECRET") \\
+    -H 'Content-Type: application/json' \\
+    -d $(printf %q "$(body "$BOB_ID" race-device-1)")
+REQ
+chmod +x "$WORK/race-request.sh"
+seq 1 8 | xargs -P 8 -I{} "$WORK/race-request.sh" {} > "$WORK/race-status.txt" 2>/dev/null || true
+check "all 8 concurrent mints succeeded"    "8" "$(grep -c '^200' "$WORK/race-status.txt" || true)"
+check "one device row, not one per request" "1" \
+    "$(curl -s "$JF/Devices" -H "$(ah "$ADMIN_TOKEN")" \
+        | python3 -c "import json,sys; print(sum(1 for d in json.load(sys.stdin)['Items'] if d['Id']=='race-device-1'))")"
+
+RACE_VALID=0
+for f in "$WORK"/race-*.json; do
+    RACE_TOKEN=$(python3 -c "
+import json
+try:
+    print(json.load(open('$f')).get('AccessToken', ''))
+except Exception:
+    print('')" 2>/dev/null || true)
+    [ -z "$RACE_TOKEN" ] && continue
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "$JF/Users/Me" -H "$(tokenauth "$RACE_TOKEN")")" = "200" ] \
+        && RACE_VALID=$((RACE_VALID + 1))
+done
+check "only the newest token survives"      "1" "$RACE_VALID"
+check "race caused no unhandled errors"     "0" \
+    "$(docker logs "$CONTAINER" 2>&1 | grep -c 'ExceptionMiddleware.*SessionProvisioning' || true)"
+
 echo "==> Revocation through normal Jellyfin mechanisms"
 curl -s -X DELETE "$JF/Devices?id=bob-livingroom-1" -H "$(ah "$ADMIN_TOKEN")" >/dev/null
 check "revoked token stops working"         "401" "$(curl -s -o /dev/null -w '%{http_code}' "$JF/Users/Me" -H "$(tokenauth "$REMINTED_TOKEN")")"

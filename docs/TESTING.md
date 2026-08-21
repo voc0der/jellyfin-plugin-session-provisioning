@@ -208,6 +208,15 @@ After a successful mint:
      the log. Without that positive control, "the secret never appears" is
      indistinguishable from "the search is broken".
 
+## Concurrency
+
+The suite fires eight simultaneous mints for the same user and `deviceId` and asserts
+that all succeed, that exactly one device row exists afterwards, that exactly one
+issued token still authenticates, and that nothing reached Jellyfin's exception
+middleware. Run this after any change to the mint path: Jellyfin's own device
+replacement is not concurrency-safe, and the invariant only holds because the plugin
+serializes minting.
+
 ## Teardown
 
 ```sh

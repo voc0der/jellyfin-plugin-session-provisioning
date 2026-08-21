@@ -63,7 +63,9 @@ the device's — the device has not connected yet. Jellyfin replaces it via
 `LogSessionActivity` the first time the client actually uses the token.
 
 Rate limiting: 120 requests per minute process-wide, applied before the secret check,
-answering 429 with `Retry-After`. See `SECURITY.md`.
+answering 429 with `Retry-After`. Minting is also serialized — one at a time — so a
+request that waits more than 30 seconds for the one in flight gets 503. See
+`SECURITY.md`.
 
 Response returns the access token exactly once:
 
@@ -167,6 +169,27 @@ invalidates the previous token and issues a new one. It does not accumulate devi
 A different `deviceId` creates an additional device entry — hence the stable-device-id
 rule in "Device-ID semantics".
 
+**That guarantee holds only for serialized calls.** `GetAuthorizationToken` reads the
+matching devices, logs them out, and creates a replacement with no lock around the
+sequence, so concurrent calls for the same user and device each observe the original
+set, delete it, and insert their own row. Measured against a real server, eight
+simultaneous mints produced:
+
+```text
+7 x 200 and 1 x 500
+4 device rows for one deviceId
+4 simultaneously valid tokens
+3 [ERR] lines in the server log
+```
+
+Four live credentials for one logical device is a security problem, not just untidy
+bookkeeping: an administrator revoking that device removes one row and leaves the
+others working. The plugin therefore serializes minting (`MintSerializer`); with that
+in place the same test yields 8 x 200, one device row, and exactly one surviving
+token. Serialization only covers requests through this endpoint — a normal client
+login racing a mint for the same device is Jellyfin's own behavior, and out of reach
+from here.
+
 ### 6. Endpoint authorization policy
 
 ```csharp
@@ -213,6 +236,20 @@ Operationally, an admin revokes through Jellyfin's normal Devices/Sessions
 administration (dashboard device list, or the `/Devices` API), which deletes the device
 record and its access token. The plugin implements no revocation of its own — it must
 not, or it would be duplicating Jellyfin state.
+
+### 13. Plugin services and dependency injection
+
+`IPluginServiceRegistrator` (`MediaBrowser.Controller.Plugins`) lets a plugin add its
+own services to Jellyfin's container, which `PluginServiceRegistrator` uses to register
+`ProvisioningSecretSource`, `MintRateLimiter`, and `MintSerializer` as singletons. The
+controller takes them as constructor parameters.
+
+They were originally `static` fields on the controller. Injecting them matters for more
+than tidiness: the rate limiter and the serializer are only meaningful if every request
+shares one instance, and a controller whose collaborators are static cannot be unit
+tested at all. `PluginServiceRegistratorTests` builds the controller out of a real
+`ServiceCollection`, so a constructor parameter that nothing registers fails a unit
+test rather than 500-ing every request on a live server.
 
 ## Configuration model: none
 

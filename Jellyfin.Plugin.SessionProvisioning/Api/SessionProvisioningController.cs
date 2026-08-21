@@ -37,21 +37,12 @@ public class SessionProvisioningController : ControllerBase
     /// </remarks>
     private const string ProvisionedApp = "Jellyfin MPV Shim";
 
-    /// <summary>
-    /// Reads the configured secret hash from the deployment environment. Stateless, so
-    /// a single shared instance is enough.
-    /// </summary>
-    private static readonly ProvisioningSecretSource SecretSource = new();
-
-    /// <summary>
-    /// Caps how fast this endpoint will do work. Process-wide, so a single shared
-    /// instance is the point; it lives for the life of the server.
-    /// </summary>
-    private static readonly MintRateLimiter RateLimiter = new();
-
     private readonly ISessionManager _sessionManager;
     private readonly IUserManager _userManager;
     private readonly IPluginManager _pluginManager;
+    private readonly ProvisioningSecretSource _secretSource;
+    private readonly MintRateLimiter _rateLimiter;
+    private readonly MintSerializer _mintSerializer;
     private readonly ILogger<SessionProvisioningController> _logger;
 
     /// <summary>
@@ -60,16 +51,25 @@ public class SessionProvisioningController : ControllerBase
     /// <param name="sessionManager">Instance of the <see cref="ISessionManager"/> interface.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     /// <param name="pluginManager">Instance of the <see cref="IPluginManager"/> interface.</param>
+    /// <param name="secretSource">Supplies the configured provisioning secret hash.</param>
+    /// <param name="rateLimiter">Bounds how often this endpoint does work.</param>
+    /// <param name="mintSerializer">Ensures only one session is provisioned at a time.</param>
     /// <param name="logger">Instance of the <see cref="ILogger{TCategoryName}"/> interface.</param>
     public SessionProvisioningController(
         ISessionManager sessionManager,
         IUserManager userManager,
         IPluginManager pluginManager,
+        ProvisioningSecretSource secretSource,
+        MintRateLimiter rateLimiter,
+        MintSerializer mintSerializer,
         ILogger<SessionProvisioningController> logger)
     {
         _sessionManager = sessionManager;
         _userManager = userManager;
         _pluginManager = pluginManager;
+        _secretSource = secretSource;
+        _rateLimiter = rateLimiter;
+        _mintSerializer = mintSerializer;
         _logger = logger;
     }
 
@@ -84,6 +84,7 @@ public class SessionProvisioningController : ControllerBase
     /// <response code="404">The requested user does not exist.</response>
     /// <response code="409">Jellyfin refused the session for the target user.</response>
     /// <response code="429">Too many provisioning requests; retry after the indicated delay.</response>
+    /// <response code="503">Another provisioning request is in flight; retry.</response>
     /// <returns>The provisioned session credential.</returns>
     [HttpPost("Mint")]
     [ProducesResponseType(typeof(MintSessionResponse), StatusCodes.Status200OK)]
@@ -93,6 +94,7 @@ public class SessionProvisioningController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<MintSessionResponse>> MintSession([FromBody] MintSessionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -111,7 +113,7 @@ public class SessionProvisioningController : ControllerBase
         // Rate limit before the secret is examined, so an elevated caller cannot use
         // this endpoint to guess the secret quickly or to drive Jellyfin's session
         // machinery in a loop.
-        if (!RateLimiter.TryAcquire(out var retryAfter))
+        if (!_rateLimiter.TryAcquire(out var retryAfter))
         {
             Response.Headers.RetryAfter = ((int)Math.Ceiling(retryAfter.TotalSeconds))
                 .ToString(CultureInfo.InvariantCulture);
@@ -121,7 +123,7 @@ public class SessionProvisioningController : ControllerBase
 
         // Gate two. Jellyfin's elevation policy is gate one, applied by [Authorize]
         // above. Both are mandatory; neither is ever conditional.
-        var configuredHash = SecretSource.GetConfiguredHash();
+        var configuredHash = _secretSource.GetConfiguredHash();
         if (!ProvisioningSecretVerifier.IsConfigured(configuredHash))
         {
             _logger.LogWarning("Session provisioning rejected: no provisioning secret is configured");
@@ -138,6 +140,17 @@ public class SessionProvisioningController : ControllerBase
         if (request.UserId.Equals(Guid.Empty))
         {
             return BadRequest();
+        }
+
+        // One mint at a time. Jellyfin's device/token replacement is not safe against
+        // concurrent calls for the same user and device: each racing call sees the old
+        // devices, deletes them, and adds its own, leaving several live tokens for one
+        // logical device. See MintSerializer.
+        using var slot = await _mintSerializer.EnterAsync().ConfigureAwait(false);
+        if (slot is null)
+        {
+            _logger.LogWarning("Session provisioning rejected: timed out waiting for an in-flight request");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
         }
 
         // Resolve the target user before touching the session machinery, so an unknown
