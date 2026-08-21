@@ -45,6 +45,11 @@ public class Plugin : BasePlugin
     /// <inheritdoc />
     public override string Description => "Admin-authorized session provisioning for Jellyfin users.";
 
+    /// <summary>
+    /// Gets this plugin's permanent unique ID.
+    /// </summary>
+    public static Guid PluginId { get; } = Guid.Parse("8d4bcbe8-ddd2-4c3a-ba8f-a7b500943e6b");
+
     /// <inheritdoc />
-    public override Guid Id => Guid.Parse("8d4bcbe8-ddd2-4c3a-ba8f-a7b500943e6b");
+    public override Guid Id => PluginId;
 }

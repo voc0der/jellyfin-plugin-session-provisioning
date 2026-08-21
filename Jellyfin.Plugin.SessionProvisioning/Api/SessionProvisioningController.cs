@@ -4,13 +4,16 @@ using System.Security;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SessionProvisioning.Security;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Common.Plugins;
 using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.Plugins;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using SessionProvisioningPlugin = Jellyfin.Plugin.SessionProvisioning.Plugin;
 
 namespace Jellyfin.Plugin.SessionProvisioning.Api;
 
@@ -41,6 +44,7 @@ public class SessionProvisioningController : ControllerBase
 
     private readonly ISessionManager _sessionManager;
     private readonly IUserManager _userManager;
+    private readonly IPluginManager _pluginManager;
     private readonly ILogger<SessionProvisioningController> _logger;
 
     /// <summary>
@@ -48,14 +52,17 @@ public class SessionProvisioningController : ControllerBase
     /// </summary>
     /// <param name="sessionManager">Instance of the <see cref="ISessionManager"/> interface.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
+    /// <param name="pluginManager">Instance of the <see cref="IPluginManager"/> interface.</param>
     /// <param name="logger">Instance of the <see cref="ILogger{TCategoryName}"/> interface.</param>
     public SessionProvisioningController(
         ISessionManager sessionManager,
         IUserManager userManager,
+        IPluginManager pluginManager,
         ILogger<SessionProvisioningController> logger)
     {
         _sessionManager = sessionManager;
         _userManager = userManager;
+        _pluginManager = pluginManager;
         _logger = logger;
     }
 
@@ -80,6 +87,17 @@ public class SessionProvisioningController : ControllerBase
     public async Task<ActionResult<MintSessionResponse>> MintSession([FromBody] MintSessionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // Gate zero: refuse while the plugin is not enabled. Controllers are registered
+        // from loaded assemblies once at startup, independently of plugin state, so a
+        // plugin disabled or malfunctioning at runtime keeps serving its routes until
+        // the server restarts. For a capability this powerful, "disabled" must mean
+        // "cannot mint" immediately, not "cannot mint after the next restart".
+        if (!IsPluginActive())
+        {
+            _logger.LogWarning("Session provisioning rejected: the plugin is not active");
+            return NotFound();
+        }
 
         // Gate two. Jellyfin's elevation policy is gate one, applied by [Authorize]
         // above. Both are mandatory; neither is ever conditional.
@@ -157,5 +175,36 @@ public class SessionProvisioningController : ControllerBase
             DeviceName = request.DeviceName,
             AccessToken = result.AccessToken
         });
+    }
+
+    /// <summary>
+    /// Determines whether Jellyfin currently considers this plugin fully active.
+    /// </summary>
+    /// <remarks>
+    /// Requires <see cref="PluginStatus.Active"/> exactly, rather than
+    /// <c>LocalPlugin.IsEnabledAndSupported</c>. Disabling a running plugin writes
+    /// <c>Disabled</c> to its manifest on disk but leaves the in-memory status at
+    /// <see cref="PluginStatus.Restart"/> (see <c>PluginManager.ProcessAlternative</c>),
+    /// and <c>IsEnabledAndSupported</c> treats <c>Restart</c> as enabled because
+    /// <c>Restart</c> sorts above <c>Active</c>. That is reasonable for an ordinary
+    /// plugin winding down, but for this endpoint "disable" must stop minting at once.
+    /// <para>
+    /// Fails closed: if no plugin record matches this assembly's ID, the plugin is in an
+    /// unexpected state and minting is refused.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>true</c> only if the plugin record is present, supported, and active.</returns>
+    private bool IsPluginActive()
+    {
+        foreach (var plugin in _pluginManager.Plugins)
+        {
+            if (plugin.Id.Equals(SessionProvisioningPlugin.PluginId))
+            {
+                return plugin.IsEnabledAndSupported
+                    && plugin.Manifest.Status == PluginStatus.Active;
+            }
+        }
+
+        return false;
     }
 }

@@ -36,6 +36,8 @@ Package references must match the installed server version or the plugin loads a
   deployment environment.
 - Keep the plugin small and auditable; avoid new abstractions/dependencies unless
   necessary.
+- Keep the lifecycle gate: minting must be impossible when no usable secret hash is
+  configured, and when the plugin is not `PluginStatus.Active`.
 - Do not begin MPV Shim installer work until the smoke test passes end-to-end.
 
 ## Before editing

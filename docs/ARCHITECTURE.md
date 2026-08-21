@@ -281,6 +281,46 @@ The controller still answers in that state, because ASP.NET discovers controller
 the loaded assembly regardless — so "the endpoint works" is not evidence the plugin
 loaded. Assert on `Loaded plugin: Session Provisioning` in the log instead.
 
+### 12. Plugin lifecycle vs. endpoint availability
+
+Controller routes and plugin state are **separate lifecycles**, and this matters for a
+security-sensitive endpoint. The mechanism, in order:
+
+1. `PluginManager.LoadAssemblies()` skips any plugin whose `IsEnabledAndSupported` is
+   false (`_supported && Manifest.Status >= PluginStatus.Active`), logging
+   `Skipping disabled plugin ...`. A disabled plugin's assembly is never loaded.
+2. `ApplicationHost.GetApiPluginAssemblies()` collects every loaded assembly containing
+   a `ControllerBase` subclass, and `Startup.ConfigureServices` passes them to
+   `AddJellyfinApi` — **once, at startup**.
+3. So route registration is a startup-time snapshot of the loaded assemblies. It does
+   not depend on the plugin *instance* being constructed successfully, and nothing
+   un-registers a route while the process runs.
+
+Consequences, all verified live:
+
+| Event | Endpoint before restart | After restart |
+|---|---|---|
+| plugin instance fails to construct (`Malfunctioned`) | route still served | route gone |
+| plugin disabled via `POST /Plugins/{id}/{version}/Disable` | route still served | route gone |
+| plugin directory removed | route still served | route gone |
+
+Disabling deserves a closer look. `PluginManager.DisablePlugin` writes `Disabled` to the
+manifest on disk, then `ProcessAlternative` sets the **in-memory** status to
+`PluginStatus.Restart`. Because the enum orders `Restart` (1) above `Active` (0),
+`IsEnabledAndSupported` remains true for the rest of the process's life — correct for an
+ordinary plugin winding down, wrong for a capability an administrator has just revoked.
+
+The plugin therefore applies its own **lifecycle gate** before either authorization gate:
+`SessionProvisioningController.IsPluginActive()` looks itself up in `IPluginManager` and
+requires `Manifest.Status == PluginStatus.Active` exactly, failing closed if no record
+matches. Disabling the plugin stops minting immediately, without waiting for a restart;
+`scripts/smoke-test.sh` proves the pre-restart, post-restart, re-enable, and
+directory-removed cases.
+
+This is upstream architecture, not a bug to fight: Jellyfin cannot unload an assembly's
+controllers without restarting. The plugin's answer is to refuse in-process rather than
+to pretend the route disappeared.
+
 ## Device-ID semantics
 
 `deviceId` is persistent provisioning state, owned by the provisioning service:

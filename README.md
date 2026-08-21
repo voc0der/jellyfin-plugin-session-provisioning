@@ -111,7 +111,13 @@ Revoke exactly as you would any other client — the dashboard device list, or
 
 **Note that this endpoint increases the power of every credential that can reach it:**
 on 10.11 any valid Jellyfin API key counts as an administrator, which is why the
-separate provisioning secret is mandatory. See [docs/SECURITY.md](docs/SECURITY.md).
+separate provisioning secret is mandatory. Block `/SessionProvisioning/*` at your public
+reverse proxy (return 404) so it is reachable only from the internal network. See
+[docs/SECURITY.md](docs/SECURITY.md).
+
+To turn the capability off: remove the hash (takes effect on the next request, no
+restart), or disable the plugin (refused immediately; the route disappears at the next
+restart).
 
 ## Build and test
 

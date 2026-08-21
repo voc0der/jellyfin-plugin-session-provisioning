@@ -80,11 +80,17 @@ HASH="$(printf '%s' "$SECRET" | sha256sum | cut -d' ' -f1)"
 
 echo "==> Starting disposable Jellyfin ${JELLYFIN_VERSION}"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+HASH_PATH=/run/secrets/sp-hash
 docker run -d --name "$CONTAINER" -p "${PORT}:8096" \
-    -e "SESSION_PROVISIONING_SECRET_HASH=${HASH}" \
+    -e "SESSION_PROVISIONING_SECRET_HASH_FILE=${HASH_PATH}" \
     "jellyfin/jellyfin:${JELLYFIN_VERSION}" >/dev/null
 
 wait_for_http
+
+echo "==> Installing secret hash file"
+printf '%s\n' "$HASH" > "$WORK/sp-hash"
+docker exec "$CONTAINER" mkdir -p "$(dirname "$HASH_PATH")"
+docker cp "$WORK/sp-hash" "$CONTAINER:$HASH_PATH"
 
 echo "==> Installing plugin"
 # docker cp rather than a bind mount: in sandboxed environments the daemon may
@@ -154,7 +160,9 @@ curl -s -X POST "$JF/Auth/Keys?app=provisioner" -H "$(ah "$ADMIN_TOKEN")" >/dev/
 API_KEY=$(curl -s "$JF/Auth/Keys" -H "$(ah "$ADMIN_TOKEN")" | jq_get '["Items"][0]["AccessToken"]')
 
 mint() { # auth-header secret body -> prints status code, body in $WORK/last.json
-    local args=(-s -o "$WORK/last.json" -w '%{http_code}' -X POST "$JF/SessionProvisioning/Mint" -H 'Content-Type: application/json')
+    # RETRY only covers connection-level failures; a 4xx is a completed transfer and
+    # is never retried, so the matrix semantics are unchanged.
+    local args=(-s "${RETRY[@]}" -o "$WORK/last.json" -w '%{http_code}' -X POST "$JF/SessionProvisioning/Mint" -H 'Content-Type: application/json')
     [ -n "$1" ] && args+=(-H "$1")
     [ -n "$2" ] && args+=(-H "X-Session-Provisioning-Secret: $2")
     args+=(-d "$3")
@@ -232,6 +240,41 @@ check "provisioning secret never logged"    "0" "$(echo "$LOGS" | grep -c "$SECR
 check "secret hash never logged"            "0" "$(echo "$LOGS" | grep -c "$HASH" || true)"
 check "audit line present"                  "yes" \
     "$(echo "$LOGS" | grep -q "Session provisioning succeeded user=" && echo yes || echo no)"
+
+echo "==> Lifecycle: secret availability"
+# The hash is re-read per request, so removing the file must disable minting with no
+# restart, and restoring it must bring the capability straight back.
+docker exec "$CONTAINER" rm -f "$HASH_PATH"
+check "hash file removed -> mint refused"   "403" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-lifecycle-1)")"
+docker cp "$WORK/sp-hash" "$CONTAINER:$HASH_PATH"
+check "hash file restored -> mint works"    "200" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-lifecycle-1)")"
+docker exec "$CONTAINER" sh -c "printf 'not-a-valid-hash\n' > $HASH_PATH"
+check "malformed hash -> mint refused"      "403" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-lifecycle-1)")"
+docker cp "$WORK/sp-hash" "$CONTAINER:$HASH_PATH"
+
+echo "==> Lifecycle: plugin disabled"
+PLUGIN_VERSION=1.0.0.0
+curl -s "${RETRY[@]}" -X POST "$JF/Plugins/$PLUGIN_GUID/$PLUGIN_VERSION/Disable" -H "$(ah "$ADMIN_TOKEN")" >/dev/null
+# Jellyfin registers plugin controllers once at startup, so the route is still mapped
+# here. The plugin's own lifecycle gate is what must refuse.
+check "disabled pre-restart -> mint refused"  "404" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-lifecycle-2)")"
+
+docker stop "$CONTAINER" >/dev/null && docker start "$CONTAINER" >/dev/null
+wait_for_http
+check "disabled post-restart -> route gone"   "404" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-lifecycle-2)")"
+check "disabled plugin assembly not loaded"  "yes" \
+    "$(docker logs "$CONTAINER" 2>&1 | grep -q "Skipping disabled plugin .* of Session Provisioning" && echo yes || echo no)"
+
+curl -s "${RETRY[@]}" -X POST "$JF/Plugins/$PLUGIN_GUID/$PLUGIN_VERSION/Enable" -H "$(ah "$ADMIN_TOKEN")" >/dev/null
+docker stop "$CONTAINER" >/dev/null && docker start "$CONTAINER" >/dev/null
+wait_for_http
+check "re-enabled -> mint works again"      "200" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-lifecycle-3)")"
+
+echo "==> Lifecycle: plugin removed"
+docker exec "$CONTAINER" rm -rf "/config/plugins/$PLUGIN_DIR_NAME"
+docker stop "$CONTAINER" >/dev/null && docker start "$CONTAINER" >/dev/null
+wait_for_http
+check "plugin removed -> route gone"        "404" "$(mint "$(ah "$ADMIN_TOKEN")" "$SECRET" "$(body "$BOB_ID" bob-lifecycle-4)")"
 
 echo
 echo "==> $PASS passed, $FAIL failed"

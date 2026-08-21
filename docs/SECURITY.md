@@ -16,6 +16,8 @@ if every test passes.
 - caller/admin authority and target-user privilege are separate concepts
 - provisioning credentials never enter generated client installers
 - the plugin stores no secret and exposes no settings UI
+- no usable secret hash configured -> minting is impossible
+- plugin disabled or removed -> minting is impossible
 ```
 
 ## The two gates
@@ -143,6 +145,29 @@ session machinery, which is not a trade worth making.
 `scripts/smoke-test.sh` asserts that every occurrence of a minted token in the logs
 comes from that upstream line, and that the plugin contributes none.
 
+## Lifecycle: when minting must be impossible
+
+Three states must all mean "cannot mint", and each is asserted by
+`scripts/smoke-test.sh`:
+
+```text
+secret hash absent, blank, or malformed
+→ mint refused (403), immediately, no restart needed
+
+plugin disabled
+→ mint refused (404) immediately, and the route is gone after a restart
+
+plugin DLL/directory removed
+→ route gone after restart
+```
+
+The subtlety is that Jellyfin registers plugin controllers from loaded assemblies **once
+at startup**, so a route cannot be un-registered while the server runs, and disabling a
+running plugin leaves its in-memory status at `Restart` — which `IsEnabledAndSupported`
+still counts as enabled. The plugin closes that gap itself by requiring
+`PluginStatus.Active` exactly before doing anything else (see `ARCHITECTURE.md` §12).
+Removing the secret is the fastest kill switch, since it needs no restart at all.
+
 ## Network defense in depth
 
 Application authorization is mandatory even on a trusted network. Where the deployment
@@ -150,6 +175,31 @@ supports it, the endpoint may *additionally* sit behind reverse-proxy source
 restrictions, mTLS, a private management network, or firewall policy. These are extra
 layers, never replacements — and the plugin itself does not become a home-grown
 firewall (no IP allowlists in plugin config).
+
+### Recommended proxy posture
+
+The endpoint should not be reachable from the public internet at all. Block it at the
+edge so that:
+
+```text
+public/proxied /SessionProvisioning/*  → 404
+direct internal Jellyfin               → endpoint exists
+```
+
+A 404 rather than a 403 keeps the edge from advertising that the capability is
+installed. The provisioning service talks to Jellyfin directly on the internal network,
+so it is unaffected.
+
+```nginx
+# in the public server block, before the general Jellyfin proxy_pass
+location ^~ /SessionProvisioning/ {
+    return 404;
+}
+```
+
+Combined with the mandatory provisioning secret, this makes the endpoint very hard to
+expose by accident: reaching it requires internal network access, an elevated Jellyfin
+credential, and the separate secret.
 
 ## Out of scope by design
 
