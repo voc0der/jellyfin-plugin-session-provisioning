@@ -15,10 +15,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" >
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)" >
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Jellyfin.Model" Version="10.11.11">
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinPackageVersion)">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
   </ItemGroup>
@@ -28,5 +28,39 @@
     <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556" PrivateAssets="All" />
     <PackageReference Include="SmartAnalyzers.MultithreadingAnalyzer" Version="1.1.31" PrivateAssets="All" />
   </ItemGroup>
+
+  <!-- meta.json is what Jellyfin reads when the plugin is installed by hand, and
+       what build.sh packages. Generating it from the same properties that drive the
+       assembly version and the package references means the manifest, the compiled
+       against packages, and the ABI cannot drift apart. -->
+  <Target Name="GeneratePluginManifest" AfterTargets="Build;Publish">
+    <ItemGroup>
+      <PluginManifestLine Include="{" />
+      <PluginManifestLine Include="  &quot;guid&quot;: &quot;$(PluginGuid)&quot;," />
+      <PluginManifestLine Include="  &quot;name&quot;: &quot;Session Provisioning&quot;," />
+      <PluginManifestLine Include="  &quot;overview&quot;: &quot;Admin-authorized session provisioning for Jellyfin users.&quot;," />
+      <PluginManifestLine Include="  &quot;description&quot;: &quot;Lets an authenticated Jellyfin administrator, subject to an additional provisioning secret, create a normal device session for an existing Jellyfin user. Built for managed client deployment. It does not provide SSO, create users, or disable Jellyfin authentication.&quot;," />
+      <PluginManifestLine Include="  &quot;owner&quot;: &quot;$(Authors)&quot;," />
+      <PluginManifestLine Include="  &quot;category&quot;: &quot;General&quot;," />
+      <PluginManifestLine Include="  &quot;version&quot;: &quot;$(Version)&quot;," />
+      <PluginManifestLine Include="  &quot;targetAbi&quot;: &quot;$(JellyfinTargetAbi)&quot;," />
+      <PluginManifestLine Include="  &quot;framework&quot;: &quot;$(TargetFramework)&quot;," />
+      <PluginManifestLine Include="  &quot;status&quot;: &quot;Active&quot;," />
+      <PluginManifestLine Include="  &quot;autoUpdate&quot;: false," />
+      <PluginManifestLine Include="  &quot;imagePath&quot;: &quot;&quot;" />
+      <PluginManifestLine Include="}" />
+    </ItemGroup>
+
+    <WriteLinesToFile File="$(OutputPath)meta.json"
+                      Lines="@(PluginManifestLine)"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
+
+    <WriteLinesToFile File="$(PublishDir)meta.json"
+                      Lines="@(PluginManifestLine)"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true"
+                      Condition="'$(PublishDir)' != ''" />
+  </Target>
 
 </Project>

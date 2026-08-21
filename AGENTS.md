@@ -15,7 +15,8 @@ Target Jellyfin Server:     10.11.11
 Target Jellyfin.Controller: 10.11.11
 Target Jellyfin.Model:      10.11.11
 Target framework:           net9.0
-build.yaml targetAbi:       10.11.0.0
+(all of the above live in Directory.Build.props; meta.json is generated from them)
+targetAbi:                  10.11.0.0
 ```
 
 Package references must match the installed server version or the plugin loads as

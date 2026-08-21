@@ -105,23 +105,9 @@ echo "==> Installing plugin"
 # resolve host paths in a different namespace, silently mounting an empty dir.
 mkdir -p "$WORK/$PLUGIN_DIR_NAME"
 cp "$REPO_ROOT/Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/Jellyfin.Plugin.SessionProvisioning.dll" "$WORK/$PLUGIN_DIR_NAME/"
-cat > "$WORK/$PLUGIN_DIR_NAME/meta.json" <<JSON
-{
-    "category": "General",
-    "changelog": "",
-    "description": "Admin-authorized session provisioning for Jellyfin users.",
-    "guid": "$PLUGIN_GUID",
-    "name": "Session Provisioning",
-    "overview": "Admin-authorized session provisioning for Jellyfin users.",
-    "owner": "voc0der",
-    "targetAbi": "10.11.0.0",
-    "timestamp": "2026-01-01T00:00:00Z",
-    "version": "1.0.0.0",
-    "status": "Active",
-    "autoUpdate": false,
-    "imagePath": ""
-}
-JSON
+# Ship the meta.json the build generated, not a hand-written copy: a second copy is
+# a second thing to drift.
+cp "$REPO_ROOT/Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/meta.json" "$WORK/$PLUGIN_DIR_NAME/"
 docker cp "$WORK/$PLUGIN_DIR_NAME" "$CONTAINER:/config/plugins/$PLUGIN_DIR_NAME"
 # stop/start rather than restart: with restart, the first readiness probe can be
 # answered by the old process that is still shutting down.
@@ -131,10 +117,10 @@ wait_for_http
 
 LOADED=$(wait_for_log "Loaded plugin: Session Provisioning" 30 && echo yes || echo no)
 check "plugin loads on ${JELLYFIN_VERSION}" "yes" "$LOADED"
-# The dashboard reports the ASSEMBLY version; build.yaml drives the manifest. Leaving
-# Directory.Build.props at the template's 0.0.0.0 makes them disagree.
-MANIFEST_VERSION=$(grep '^version:' "$REPO_ROOT/build.yaml" | cut -d'"' -f2)
-check "assembly version matches build.yaml"  "$MANIFEST_VERSION" \
+# The dashboard reports the ASSEMBLY version; meta.json carries the manifest version.
+# Both now come from Directory.Build.props, so this asserts the generation works.
+MANIFEST_VERSION=$(grep -oP '(?<=<Version>)[^<]+' "$REPO_ROOT/Directory.Build.props" | head -1)
+check "assembly version matches the manifest" "$MANIFEST_VERSION" \
     "$(docker logs "$CONTAINER" 2>&1 | grep -o "Loaded plugin: Session Provisioning [0-9.]*" | tail -1 | awk '{print $NF}')"
 
 echo "==> Preparing fixtures"

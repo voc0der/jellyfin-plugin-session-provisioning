@@ -1,0 +1,42 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 9.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Check whitespace formatting
+      run: dotnet format whitespace --verify-no-changes --verbosity minimal
+
+    - name: Check C# style formatting
+      run: dotnet format style --verify-no-changes --severity warn --verbosity minimal
+
+    # Warnings are errors in the plugin project, so a clean build is part of the gate.
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+
+    - name: Run tests
+      run: dotnet test --no-build --configuration Release --verbosity minimal
+
+    # scripts/smoke-test.sh is deliberately not run here. It needs Docker and a
+    # disposable Jellyfin, and is run locally before a release instead. Adding it
+    # is one step - `run: ./scripts/smoke-test.sh` - if that changes.

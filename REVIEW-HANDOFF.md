@@ -224,9 +224,10 @@ removed / plugin disabled / plugin deleted). Non-zero exit on any failure.
    endpoint already requires elevation + secret, is 120/min the right number?
 6. **The 503 path.** A serializer timeout returns 503 with no `Retry-After`. Should it
    have one, and is 30s sensible?
-7. **Version/ABI drift.** `Directory.Build.props` and `build.yaml` must be bumped
-   together; a smoke check enforces equality, but nothing enforces `targetAbi` matching
-   the pinned package version.
+7. **Version/ABI drift.** Resolved since: version, ABI, package version and plugin
+   GUID all live in `Directory.Build.props`, `meta.json` is generated from them, and
+   both `build.sh` and the smoke suite assert the archive matches. `targetAbi`
+   (10.11.0.0) is still broader than the pinned package (10.11.11) by choice.
 8. **Threat model sanity check.** Does anything here meaningfully increase risk beyond
    the stated position — "this endpoint increases the power of every credential that can
    reach it, which is why the second secret and the proxy posture exist"?

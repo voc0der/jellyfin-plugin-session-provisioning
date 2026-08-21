@@ -1,0 +1,40 @@
+version: 2
+updates:
+  # Keep GitHub Actions up to date
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # Keep NuGet packages up to date (requires careful review)
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "nuget"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Group Jellyfin packages together since they must match each other.
+    #
+    # A bump here is never routine: JellyfinPackageVersion in Directory.Build.props
+    # is the server this plugin is built and tested against, and the smoke suite
+    # runs against that exact container image. Treat these PRs as "a new server
+    # version is available" and re-run scripts/smoke-test.sh against it, not as a
+    # dependency update.
+    groups:
+      jellyfin-packages:
+        patterns:
+          - "Jellyfin.*"

@@ -1,15 +1,19 @@
 <Project>
     <!--
-        Keep in step with "version:" in build.yaml. Jellyfin reads the manifest version
-        from build.yaml when packaging, but reports the *assembly* version in the
-        dashboard and in PluginManager's records; leaving this at the template's
-        0.0.0.0 makes an installed plugin show as 0.0.0.0 while its manifest claims
-        something else, and PluginManager's CreatePluginInstance rewrites manifests to
-        reconcile the two. scripts/smoke-test.sh asserts the two stay equal.
+        One place for the version and the server it targets. build.sh and CI pass
+        VERSION in to override it at release time; everything else - the assembly
+        version, the generated meta.json, and the package references below - reads
+        from here, so the manifest cannot disagree with the assembly, and the ABI
+        cannot drift from the packages the plugin was compiled against.
     -->
     <PropertyGroup>
         <Version>1.0.0.0</Version>
-        <AssemblyVersion>1.0.0.0</AssemblyVersion>
-        <FileVersion>1.0.0.0</FileVersion>
+        <AssemblyVersion>$(Version)</AssemblyVersion>
+        <FileVersion>$(Version)</FileVersion>
+        <Authors>voc0der</Authors>
+
+        <JellyfinPackageVersion>10.11.11</JellyfinPackageVersion>
+        <JellyfinTargetAbi>10.11.0.0</JellyfinTargetAbi>
+        <PluginGuid>8d4bcbe8-ddd2-4c3a-ba8f-a7b500943e6b</PluginGuid>
     </PropertyGroup>
 </Project>

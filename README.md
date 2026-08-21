@@ -1,86 +1,82 @@
-<h1 align="center">Jellyfin Session Provisioning Plugin</h1>
+<p align="center">
+  <img src="banner.png" alt="Jellyfin Session Provisioning" width="880" />
+</p>
 
-<p align="center">Admin-authorized session provisioning for Jellyfin users.</p>
+# Session Provisioning
 
-## What this is
+<p align="center">
+  <a href="https://github.com/voc0der/jellyfin-plugin-session-provisioning/releases/latest">
+    <img src="https://img.shields.io/github/v/release/voc0der/jellyfin-plugin-session-provisioning?label=stable%20release" alt="Stable release version" />
+  </a>
+  <a href="https://github.com/voc0der/jellyfin-plugin-session-provisioning/tree/main/tests">
+    <img src="https://img.shields.io/badge/coverage-94%25-brightgreen" alt="Code coverage percentage" />
+  </a>
+  <a href="https://github.com/voc0der/jellyfin-plugin-session-provisioning/actions/workflows/codeql.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/voc0der/jellyfin-plugin-session-provisioning/codeql.yml?branch=main&label=codeql" alt="CodeQL status" />
+  </a>
+  <a href="https://github.com/voc0der/jellyfin-plugin-session-provisioning/issues">
+    <img src="https://img.shields.io/github/issues/voc0der/jellyfin-plugin-session-provisioning?color=DAA520" alt="Open issues" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/voc0der/jellyfin-plugin-session-provisioning?color=97CA00" alt="License" />
+  </a>
+</p>
 
-A small, auditable Jellyfin server plugin that lets an **already-authorized Jellyfin
-administrator** provision a normal device session for an **existing Jellyfin user**
-without that user's password, an SSO browser flow, or Quick Connect interaction.
+Ship a Jellyfin client that is already signed in. An administrator asks the server for a session on behalf of an existing user and gets back that user's normal access token — no password, no SSO browser flow, no Quick Connect tap on the device. Built for handing someone a media box that works the moment they plug it in.
 
-The intended use case is managed client deployment — for example, pre-provisioned
-Jellyfin MPV Shim installs.
+Jellyfin issues the session, lists it beside every other client, and revokes it the usual way. The plugin only asks.
 
-```text
-existing Jellyfin user
-        +
-already-authorized Jellyfin administrator
-        +
-secondary provisioning secret
-        ↓
-plugin asks Jellyfin to create a normal session/device
-        ↓
-Jellyfin returns the target user's normal AccessToken
+## Installation
+
+Requires Jellyfin 10.11.11. Add this repository under **Dashboard > Plugins > Repositories**, install **Session Provisioning** from the catalog, and restart.
+
+```
+https://raw.githubusercontent.com/voc0der/jellyfin-plugin-session-provisioning/main/manifest.json
 ```
 
-It is one endpoint with no stored state and no UI: two authorization gates, input
-validation, a call into Jellyfin's own session manager, and a token back. Jellyfin
-handles device/session display and revocation as it does for any other client.
+### Manual
 
-## What this is not
+1. Download the ZIP from the [releases page](https://github.com/voc0der/jellyfin-plugin-session-provisioning/releases)
+2. Extract it into `<jellyfin-data>/plugins/`
+3. Restart Jellyfin
 
-> Session Provisioning does not provide SSO, create users, or disable Jellyfin
-> authentication. It allows an authenticated Jellyfin administrator, subject to an
-> additional provisioning secret, to create a normal device session for an existing
-> Jellyfin user for managed-client deployment.
+#### Building from source
 
-Jellyfin owns identity, roles, permissions, session persistence, device persistence,
-token generation, and revocation.
+```bash
+./build.sh
+```
 
-## Target version
-
-| | |
-|---|---|
-| Jellyfin server | 10.11.11 |
-| `Jellyfin.Controller` / `Jellyfin.Model` | 10.11.11 |
-| `targetAbi` | 10.11.0.0 |
-| Framework | net9.0 |
-
-Package references must match the installed server version, or the plugin will show
-as `NotSupported`.
+Runs the tests and writes the archive to `artifacts/`.
 
 ## Setup
 
-Generate a secret and its hash on a trusted machine:
+There is no settings page. The plugin holds no state, and the secret is never typed into or shown by the web UI — the server reads its hash from the environment.
 
-```sh
+Make a secret and hash it on a trusted machine:
+
+```bash
 SECRET="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
-printf '%s' "$SECRET" | sha256sum      # this hash goes on the server
+printf '%s' "$SECRET" | sha256sum
 ```
 
-Give the **secret** to the provisioning service and the **hash** to Jellyfin. There is
-no settings page: the plugin reads the hash from the environment.
+Give the hash to Jellyfin, keep the secret for whatever does your provisioning:
 
 ```yaml
-# docker compose
 services:
   jellyfin:
-    image: jellyfin/jellyfin:10.11.11
     environment:
       SESSION_PROVISIONING_SECRET_HASH_FILE: /run/secrets/sp-hash
     volumes:
       - ./sp-hash:/run/secrets/sp-hash:ro
 ```
 
-`SESSION_PROVISIONING_SECRET_HASH` may be used instead to pass the hash directly; the
-`_FILE` form wins if both are set and is preferred. Neither name is `JELLYFIN_`-prefixed
-on purpose — Jellyfin prints those variables into its log at startup.
+Until a valid hash is configured, the endpoint mints nothing. `SESSION_PROVISIONING_SECRET_HASH` passes the hash directly if you would rather not mount a file.
 
-While no usable hash is configured, minting is disabled entirely.
+Block `/SessionProvisioning/*` at your public reverse proxy. Nothing outside your network should reach it.
 
 ## Usage
 
-```sh
+```bash
 curl -X POST "$JELLYFIN_URL/SessionProvisioning/Mint" \
   -H "Authorization: MediaBrowser Token=\"$JELLYFIN_API_KEY\"" \
   -H "X-Session-Provisioning-Secret: $SECRET" \
@@ -102,49 +98,21 @@ curl -X POST "$JELLYFIN_URL/SessionProvisioning/Mint" \
 }
 ```
 
-Provisioning is rate limited to 120 requests per minute, answering 429 with
-`Retry-After` beyond that.
+The token comes back once. It is an ordinary session token carrying that user's own permissions — mint one for an administrator and you get an administrator's session.
 
-The token is returned once and is a normal Jellyfin session token carrying that user's
-existing permissions. Use one stable `deviceId` per managed installation: re-minting the
-same user + `deviceId` rotates the token instead of piling up device entries.
+Give each managed install its own `deviceId` and keep it: minting again for the same one replaces that install's token instead of leaving a second live credential behind. Revoke like any other client, from the dashboard device list.
 
-One exception: if the target user is at their `MaxActiveSessions` limit, Jellyfin
-refuses before replacing anything, so re-minting even that user's own existing device
-returns 409 and the previous token keeps working. Revoke the device first.
+## Good to know
 
-Revoke exactly as you would any other client — the dashboard device list, or
-`DELETE /Devices?id=<deviceId>`.
-
-**Note that this endpoint increases the power of every credential that can reach it:**
-on 10.11 any valid Jellyfin API key counts as an administrator, which is why the
-separate provisioning secret is mandatory. Block `/SessionProvisioning/*` at your public
-reverse proxy (return 404) so it is reachable only from the internal network. See
-[docs/SECURITY.md](docs/SECURITY.md).
-
-To turn the capability off: remove the hash (takes effect on the next request, no
-restart), or disable the plugin (refused immediately; the route disappears at the next
-restart).
-
-## Build and test
-
-```sh
-dotnet build -c Release
-dotnet test
-./scripts/smoke-test.sh     # full authorization matrix against a disposable server
-```
-
-The plugin DLL is written to
-`Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/Jellyfin.Plugin.SessionProvisioning.dll`.
-See [docs/TESTING.md](docs/TESTING.md) for installing it into a test server by hand.
+- **Two credentials are required, always.** Jellyfin administrator authorization *and* the provisioning secret. Every Jellyfin API key counts as an administrator, so the secret is what keeps this to your provisioning service rather than to every integration you have ever issued a key to.
+- **Turning it off:** remove the hash and the next request is refused, no restart needed. Disabling the plugin refuses immediately too.
+- **Rate limited** to 120 requests a minute, and one mint runs at a time.
+- If the target user is at their session limit, minting is refused and their existing token keeps working. Revoke the old device first.
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design, and the verified Jellyfin
-  10.11.11 API behavior it relies on
-- [docs/SECURITY.md](docs/SECURITY.md) — invariants, threat reasoning, logging caveats
-- [docs/TESTING.md](docs/TESTING.md) — reproducible test recipes
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the design and the Jellyfin behaviour it depends on, verified against 10.11.11. [docs/SECURITY.md](docs/SECURITY.md) covers the threat model and the invariants. [docs/TESTING.md](docs/TESTING.md) covers reproducing any of it.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE)

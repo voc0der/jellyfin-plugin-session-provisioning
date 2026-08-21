@@ -1,0 +1,232 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+# One release at a time. Two pushes landing together each derive their version from
+# the same latest tag, and `gh release create` tags whatever main points at when it
+# runs rather than the commit that was built. Queued, not cancelled: every commit on
+# main still gets its own release.
+#
+# `cancel-in-progress: false` protects only the run that is executing; the pending
+# slot defaults to `queue: single`, which cancels the waiting run to make room for a
+# newer one and silently drops the middle commit's release. `queue: max` holds
+# pending runs instead.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0  # Fetch all history for changelog generation
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 9.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+
+    - name: Generate version and changelog
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      id: version
+      run: |
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0.0")
+        echo "Latest tag: $LATEST_TAG"
+
+        IFS='.' read -ra VERSION_PARTS <<< "$LATEST_TAG"
+        MAJOR=${VERSION_PARTS[0]:-1}
+        MINOR=${VERSION_PARTS[1]:-0}
+        BUILD=${VERSION_PARTS[2]:-0}
+        REVISION=${VERSION_PARTS[3]:-0}
+
+        REVISION=$((REVISION + 1))
+        NEW_VERSION="${MAJOR}.${MINOR}.${BUILD}.${REVISION}"
+
+        echo "New version: $NEW_VERSION"
+        echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+        echo "## What's Changed" > CHANGELOG.md
+        echo "" >> CHANGELOG.md
+
+        if [ "$LATEST_TAG" != "1.0.0.0" ] || git rev-parse "$LATEST_TAG" >/dev/null 2>&1; then
+          git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> CHANGELOG.md
+        else
+          git log --pretty=format:"- %s (%h)" --no-merges >> CHANGELOG.md
+        fi
+
+        echo "" >> CHANGELOG.md
+        echo "" >> CHANGELOG.md
+        echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LATEST_TAG}...${NEW_VERSION}" >> CHANGELOG.md
+
+        cat CHANGELOG.md
+
+    # build.sh runs the tests and refuses to package if a host assembly leaked into
+    # the archive, or if meta.json disagrees with the version or the ABI.
+    - name: Build and package
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: VERSION="${{ steps.version.outputs.version }}" ./build.sh
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: Jellyfin.Plugin.SessionProvisioning
+        path: artifacts/*.zip
+        if-no-files-found: ignore
+
+    # The release is created before manifest.json is touched, and that ordering is
+    # load-bearing. The manifest *is* the plugin catalogue - it is served straight off
+    # main - so a manifest commit landing before a failed `gh release create`
+    # advertises a version whose download URL 404s and whose checksum matches nothing.
+    # Failing here instead leaves the catalogue exactly as it was.
+    - name: Create Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        SERVER=$(grep -oP '(?<=<JellyfinPackageVersion>)[^<]+' Directory.Build.props | head -1)
+        REPO="${{ github.repository }}"
+        RAW="https://raw.githubusercontent.com/${REPO}/main"
+
+        {
+          cat CHANGELOG.md
+          echo ""
+          echo "## Install"
+          echo ""
+          echo "Add this repository under Dashboard > Plugins > Repositories:"
+          echo ""
+          echo "\`${RAW}/manifest.json\`"
+          echo ""
+          echo "Or install by hand with \`SessionProvisioning_${VERSION}_jellyfin-${SERVER}.zip\`."
+          echo ""
+          echo "Built and tested against Jellyfin ${SERVER}."
+        } > RELEASE_NOTES.md
+
+        # --target pins the tag to the commit these artifacts were built from.
+        # Without it the tag lands on main's current tip, which is not the same thing
+        # once a second merge is in flight.
+        gh release create "$VERSION" \
+          --title "Release $VERSION" \
+          --notes-file RELEASE_NOTES.md \
+          --target "${{ github.sha }}" \
+          artifacts/*.zip
+
+    # A created release is not the same as a complete one: a partial or dropped asset
+    # upload does not fail `gh release create`. The catalogue is about to promise a
+    # byte-exact checksum for this URL, so fetch it back and prove the promise first.
+    - name: Verify the published archive
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        rm -rf published && mkdir -p published
+        gh release download "$VERSION" --dir published --clobber
+
+        for local in artifacts/*.zip; do
+          name=$(basename "$local")
+          if [ ! -f "published/${name}" ]; then
+            echo "::error::${name} is missing from release ${VERSION}"
+            exit 1
+          fi
+          if ! cmp -s "$local" "published/${name}"; then
+            echo "::error::${name} on release ${VERSION} differs from the archive that was built"
+            exit 1
+          fi
+          echo "verified ${name}"
+        done
+
+    - name: Update the plugin catalogue
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        REPO="${{ github.repository }}"
+        SERVER=$(grep -oP '(?<=<JellyfinPackageVersion>)[^<]+' Directory.Build.props | head -1)
+        ZIP_NAME="SessionProvisioning_${VERSION}_jellyfin-${SERVER}.zip"
+
+        # Checksum and ABI are both taken from the archive as the release serves it,
+        # not from the local build output: the catalogue's checksum then describes the
+        # exact bytes behind the URL it publishes, and the ABI cannot disagree with
+        # what the plugin itself declares.
+        checksum=$(md5sum "published/${ZIP_NAME}" | awk '{print $1}')
+        abi=$(unzip -p "published/${ZIP_NAME}" '*/meta.json' | jq -r .targetAbi)
+        echo "${ZIP_NAME}: targetAbi ${abi}, md5 ${checksum}"
+
+        jq --arg version "$VERSION" \
+           --rawfile changelog CHANGELOG.md \
+           --arg checksum "$checksum" \
+           --arg timestamp "$TIMESTAMP" \
+           --arg abi "$abi" \
+           --arg url "https://github.com/${REPO}/releases/download/${VERSION}/${ZIP_NAME}" \
+           '[.[0] + {
+             "versions": ([{
+               "version": $version,
+               "changelog": $changelog,
+               "targetAbi": $abi,
+               "sourceUrl": $url,
+               "checksum": $checksum,
+               "timestamp": $timestamp
+             }] + .[0].versions)
+           }]' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+
+        # Only advertise an icon once one exists, rather than publishing a URL that
+        # 404s in every operator's plugin catalogue.
+        if [ -f icon.png ]; then
+          jq --arg imageUrl "https://raw.githubusercontent.com/${REPO}/main/icon.png" \
+             '.[0].imageUrl = $imageUrl' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+        else
+          echo "No icon.png in the repository root; leaving imageUrl unset."
+          jq 'del(.[0].imageUrl)' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+        fi
+
+        # The catalogue is what operators' servers read. Assert the entry it now
+        # advertises rather than assuming the jq above did what it reads like.
+        got=$(jq -r '.[0].versions[0].targetAbi' manifest.json)
+        want=$(grep -oP '(?<=<JellyfinTargetAbi>)[^<]+' Directory.Build.props | head -1)
+        if [ "$got" != "$want" ]; then
+          echo "::error::manifest.json now advertises targetAbi ${got}, expected ${want}"
+          exit 1
+        fi
+
+    # Pushed with GITHUB_TOKEN, which does not retrigger workflows, so this commit
+    # cannot start another release run.
+    - name: Commit updated manifest
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        git config user.name "voc0der"
+        git config user.email "contact@netspace.in"
+        git add manifest.json
+        git commit -m "chore(release): update the plugin catalogue for version ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+
+        # A swallowed push failure leaves a release that the catalogue never learns
+        # about. Rebase onto whatever landed meanwhile and retry; if it still will not
+        # go, fail the job rather than report success.
+        for attempt in 1 2 3; do
+          if git push; then
+            exit 0
+          fi
+          echo "push rejected (attempt $attempt), rebasing onto origin/main"
+          git fetch origin main
+          git rebase origin/main || exit 1
+        done
+
+        echo "::error::Could not push the manifest update after 3 attempts"
+        exit 1

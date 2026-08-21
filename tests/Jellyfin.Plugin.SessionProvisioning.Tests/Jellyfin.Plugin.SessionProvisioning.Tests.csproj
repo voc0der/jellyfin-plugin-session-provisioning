@@ -29,8 +29,8 @@
         supplies them at runtime. The test host has no Jellyfin around it, so it needs
         the actual assemblies. Keep the versions equal to the plugin's.
     -->
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
-    <PackageReference Include="Jellyfin.Model" Version="10.11.11" />
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)" />
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinPackageVersion)" />
   </ItemGroup>
 
   <ItemGroup>

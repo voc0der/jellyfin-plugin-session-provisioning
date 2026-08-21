@@ -1,0 +1,11 @@
+[
+  {
+    "guid": "8d4bcbe8-ddd2-4c3a-ba8f-a7b500943e6b",
+    "name": "Session Provisioning",
+    "overview": "Admin-authorized session provisioning for Jellyfin users",
+    "description": "Lets an authenticated Jellyfin administrator, subject to an additional provisioning secret, create a normal device session for an existing Jellyfin user. Built for managed client deployment, so a client can ship already enrolled without the user's password, an SSO browser flow, or Quick Connect. It does not provide SSO, create users, or disable Jellyfin authentication, and it stores nothing: the secret's hash comes from the server's environment, and Jellyfin issues and revokes the session itself.",
+    "category": "General",
+    "owner": "voc0der",
+    "versions": []
+  }
+]

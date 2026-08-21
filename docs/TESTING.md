@@ -20,7 +20,7 @@ gate, or session creation.
 ## Build
 
 ```sh
-dotnet build -c Release
+dotnet build -c Release   # or ./build.sh for a packaged, validated archive
 ```
 
 Warnings are errors (`TreatWarningsAsErrors`), so a clean build means 0 warnings. The
@@ -56,29 +56,15 @@ hash in its startup log.
 
 ### Install the plugin
 
-Build a plugin directory containing the DLL and a `meta.json`, then copy it in.
+Build a plugin directory containing the DLL and the generated `meta.json`, then copy
+it in. `meta.json` comes out of the build (an MSBuild target fills it from
+`Directory.Build.props`), so it always matches the assembly it ships beside.
 
 ```sh
 PLUGIN_DIR="Session Provisioning_1.0.0.0"
 mkdir -p "/tmp/$PLUGIN_DIR"
 cp Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/Jellyfin.Plugin.SessionProvisioning.dll "/tmp/$PLUGIN_DIR/"
-cat > "/tmp/$PLUGIN_DIR/meta.json" <<'JSON'
-{
-    "category": "General",
-    "changelog": "",
-    "description": "Admin-authorized session provisioning for Jellyfin users.",
-    "guid": "8d4bcbe8-ddd2-4c3a-ba8f-a7b500943e6b",
-    "name": "Session Provisioning",
-    "overview": "Admin-authorized session provisioning for Jellyfin users.",
-    "owner": "voc0der",
-    "targetAbi": "10.11.0.0",
-    "timestamp": "2026-08-21T00:00:00Z",
-    "version": "1.0.0.0",
-    "status": "Active",
-    "autoUpdate": false,
-    "imagePath": ""
-}
-JSON
+cp Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/meta.json "/tmp/$PLUGIN_DIR/"
 
 docker cp "/tmp/$PLUGIN_DIR" "jf-sp-test:/config/plugins/$PLUGIN_DIR"
 docker restart jf-sp-test
