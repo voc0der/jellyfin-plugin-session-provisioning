@@ -1,0 +1,244 @@
+# Architecture
+
+## Purpose
+
+Let an already-authorized Jellyfin administrator provision a normal device session for
+an **existing** Jellyfin user, without that user's password, an SSO browser flow, or
+Quick Connect interaction. The intended consumer is a managed-client provisioning
+service that bakes the resulting credential into a client installation.
+
+Jellyfin owns identity, roles, permissions, session persistence, device persistence,
+token generation, and revocation. This plugin adds one narrowly gated administrative
+capability on top of them.
+
+## Threat boundary
+
+```text
+trusted provisioner
+   │
+   ├── Jellyfin admin authorization      (Jellyfin's own elevation policy)
+   ├── provisioning secret               (this plugin's independent gate)
+   │
+   ▼
+Session Provisioning plugin
+   │
+   ├── Jellyfin elevation check
+   ├── secondary-secret check
+   ├── resolve existing target user
+   │
+   ▼
+Jellyfin ISessionManager
+   │
+   ▼
+normal Jellyfin device/session
+   │
+   ▼
+target-user AccessToken
+```
+
+Both gates are mandatory. See `SECURITY.md` for the invariants and their consequences.
+
+## Route
+
+```http
+POST /SessionProvisioning/Mint
+Authorization: <normal Jellyfin authorization>
+X-Session-Provisioning-Secret: <secret>
+Content-Type: application/json
+
+{
+  "userId": "<jellyfin-user-guid>",
+  "deviceId": "<stable-device-id>",
+  "deviceName": "Living Room MPV Shim",
+  "appVersion": "3.x"
+}
+```
+
+The `App` identity is controlled by the plugin (`Jellyfin MPV Shim`) rather than taken
+from the request. `AuthenticationRequest` permits arbitrary `App` values; exposing that
+would turn this into a generic client-impersonation API.
+
+Response returns the access token exactly once:
+
+```json
+{
+  "userId": "...",
+  "deviceId": "...",
+  "deviceName": "Living Room MPV Shim",
+  "accessToken": "..."
+}
+```
+
+## Verified Jellyfin surface (10.11.11)
+
+Everything below was verified against the pinned packages and the `v10.11.11` source
+tag, not from memory. Re-verify on any version bump.
+
+Verification commands used:
+
+- reflection over `Jellyfin.Controller` / `Jellyfin.Model` 10.11.11 and
+  `MediaBrowser.Common` 10.11.11 (a throwaway console project referencing the exact
+  pinned package versions);
+- `Emby.Server.Implementations/Session/SessionManager.cs`,
+  `Jellyfin.Server/Extensions/ApiServiceCollectionExtensions.cs`, and
+  `Jellyfin.Api/Auth/CustomAuthenticationHandler.cs` at tag `v10.11.11`.
+
+### 1. Session-minting entry point
+
+```csharp
+// MediaBrowser.Controller.Session.ISessionManager, MediaBrowser.Controller 10.11.11.0
+Task<AuthenticationResult> AuthenticateDirect(AuthenticationRequest request);
+```
+
+`SessionManager.AuthenticateDirect` delegates to
+`AuthenticateNewSessionInternal(request, enforcePassword: false)`. That is the whole
+difference from `AuthenticateNewSession` — no password is required, everything else
+(device access checks, session limits, device creation, token issuance, event
+publication) is Jellyfin's normal login path.
+
+`ISessionManager` is a server singleton and is injectable into a plugin controller.
+
+### 2. Mandatory `AuthenticationRequest` fields
+
+`AuthenticateNewSessionInternal` begins with:
+
+```csharp
+ArgumentException.ThrowIfNullOrEmpty(request.App);
+ArgumentException.ThrowIfNullOrEmpty(request.DeviceId);
+ArgumentException.ThrowIfNullOrEmpty(request.DeviceName);
+ArgumentException.ThrowIfNullOrEmpty(request.AppVersion);
+```
+
+So `App`, `DeviceId`, `DeviceName`, and **`AppVersion` are all required** —
+`appVersion` is not optional in our request model. `Password` / `PasswordSha1` are
+unused on this path. `RemoteEndPoint` is optional and is recorded on the session.
+
+Full property set: `Username`, `UserId`, `Password`, `PasswordSha1`, `App`,
+`AppVersion`, `DeviceId`, `DeviceName`, `RemoteEndPoint`.
+
+### 3. How the target user is identified
+
+```csharp
+User user = null;
+if (!request.UserId.IsEmpty()) { user = _userManager.GetUserById(request.UserId); }
+user ??= _userManager.GetUserByName(request.Username);
+if (user is null) { throw new AuthenticationException("Invalid username or password entered."); }
+```
+
+Setting `UserId` alone is sufficient and is what this plugin does — user IDs are stable
+across renames. Note the failure mode: an unknown user surfaces as
+`AuthenticationException`, which the plugin must translate into a clean 4xx rather than
+leaking Jellyfin's "Invalid username or password entered." wording.
+
+Two further Jellyfin-owned rejections happen after user resolution, and the plugin must
+not attempt to bypass either:
+
+- `_deviceManager.CanAccessDevice(user, request.DeviceId)` — `SecurityException` when
+  the target user's policy restricts which devices they may use;
+- `user.MaxActiveSessions` — `SecurityException` ("User is at their maximum number of
+  sessions") when the target user is at their session cap.
+
+### 4. What gets created
+
+`GetAuthorizationToken(user, deviceId, app, appVersion, deviceName)`:
+
+1. queries existing devices matching `{ DeviceId, UserId }`;
+2. **logs out every match** (`Logout(auth)`), i.e. revokes the prior token for that
+   user+device pair;
+3. `_deviceManager.CreateDevice(new Device(user.Id, app, appVersion, deviceName, deviceId))`;
+4. returns `device.AccessToken`.
+
+Then `LogSessionActivity(...)` creates the `SessionInfo`, and the result is
+`AuthenticationResult { User, SessionInfo, AccessToken, ServerId }`
+(`MediaBrowser.Controller.Authentication`). An `AuthenticationResultEventArgs` event is
+published, so normal Jellyfin activity logging sees the provisioning.
+
+### 5. Re-minting the same `deviceId`
+
+Answered by step 2 above: minting again for the **same user + same `deviceId`**
+invalidates the previous token and issues a new one. It does not accumulate devices.
+A different `deviceId` creates an additional device entry — hence the stable-device-id
+rule in "Device-ID semantics".
+
+### 6. Endpoint authorization policy
+
+```csharp
+// Jellyfin.Server/Extensions/ApiServiceCollectionExtensions.cs (v10.11.11)
+options.AddPolicy(
+    Policies.RequiresElevation,
+    policy => policy.AddAuthenticationSchemes(AuthenticationSchemes.CustomAuthentication)
+        .RequireClaim(ClaimTypes.Role, UserRoles.Administrator));
+```
+
+On 10.11 the constants live in **`MediaBrowser.Common.Api.Policies`** (not
+`Jellyfin.Api.Constants`), so a plugin can reference `Policies.RequiresElevation`
+through the pinned `Jellyfin.Controller` dependency chain.
+
+### 7. Do API keys satisfy that policy? Yes.
+
+```csharp
+// Jellyfin.Api/Auth/CustomAuthenticationHandler.cs (v10.11.11)
+var role = UserRoles.User;
+if (authorizationInfo.IsApiKey
+    || (authorizationInfo.User?.HasPermission(PermissionKind.IsAdministrator) ?? false))
+{
+    role = UserRoles.Administrator;
+}
+```
+
+**Any valid Jellyfin API key is treated as `Administrator`** and therefore passes
+`RequiresElevation`. This is precisely why the independent provisioning secret exists:
+without it, every existing API-key holder on the server would silently gain the ability
+to mint sessions for any user. See `SECURITY.md`.
+
+For an API-key caller, `authorizationInfo.UserId` is `Guid.Empty` — there is no caller
+user. Audit logging must tolerate that.
+
+### 8. Revocation path
+
+```csharp
+Task Logout(string accessToken);   // ISessionManager
+Task Logout(Device device);        // ISessionManager
+Task RevokeUserTokens(Guid userId, string currentAccessToken);
+```
+
+Operationally, an admin revokes through Jellyfin's normal Devices/Sessions
+administration (dashboard device list, or the `/Devices` API), which deletes the device
+record and its access token. The plugin implements no revocation of its own — it must
+not, or it would be duplicating Jellyfin state.
+
+## Configuration model
+
+```csharp
+public string? ProvisioningSecretHash { get; set; }   // SHA-256 of the secret, hex
+```
+
+The admin configures the **hash**, never the plaintext. The plugin therefore never
+stores, displays, or recovers a secret. See `SECURITY.md` for the rationale and the
+generation recipe.
+
+## Device-ID semantics
+
+`deviceId` is persistent provisioning state, owned by the provisioning service:
+
+```text
+one stable unique deviceId per managed logical installation
+    living-room-mpv-shim-<uuid>
+    parents-laptop-mpv-shim-<uuid>
+```
+
+- A reinstall/rebuild of the *same* managed installation reuses its existing device ID
+  (which, per §5 above, rotates the token and leaves exactly one device entry).
+- A genuinely distinct installation gets a new one.
+- Never generate a fresh random device ID per package build, or Jellyfin's device list
+  fills with junk.
+
+## Phase separation
+
+This repository is the **plugin only**: one gated endpoint that returns a token.
+
+The installer builder (fetching a token, assembling an MPV Shim package, embedding
+client config and mTLS material) is a separate phase and a separate program. Nothing in
+this repository should grow toward it until the plugin primitive is proven end to end.
+Provisioning authority stays server-side: generated installers carry only the single
+target user's device credential, never an admin key or the provisioning secret.
