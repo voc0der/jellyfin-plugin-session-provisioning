@@ -9,7 +9,7 @@
     <img src="https://img.shields.io/github/v/release/voc0der/jellyfin-plugin-session-provisioning?label=stable%20release" alt="Stable release version" />
   </a>
   <a href="https://github.com/voc0der/jellyfin-plugin-session-provisioning/tree/main/tests">
-    <img src="https://img.shields.io/badge/coverage-94%25-brightgreen" alt="Code coverage percentage" />
+    <img src="https://img.shields.io/badge/coverage-95%25-brightgreen" alt="Code coverage percentage" />
   </a>
   <a href="https://github.com/voc0der/jellyfin-plugin-session-provisioning/actions/workflows/codeql.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/voc0der/jellyfin-plugin-session-provisioning/codeql.yml?branch=main&label=codeql" alt="CodeQL status" />
