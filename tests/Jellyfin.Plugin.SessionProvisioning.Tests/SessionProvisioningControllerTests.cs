@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using NSubstitute.ReturnsExtensions;
 
 namespace Jellyfin.Plugin.SessionProvisioning.Tests;
 
@@ -207,7 +208,7 @@ public sealed class SessionProvisioningControllerTests
     public async Task MintSession_UnknownUser_IsNotFound()
     {
         var unknown = Guid.NewGuid();
-        _userManager.GetUserById(unknown).Returns((User?)null);
+        _userManager.GetUserById(unknown).ReturnsNull();
 
         Assert.Equal(StatusCodes.Status404NotFound, StatusOf(await CreateController().MintSession(Request(unknown))));
         await AssertNoSessionCreated();

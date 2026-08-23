@@ -32,7 +32,10 @@ public class Plugin : BasePlugin
     {
         var assembly = GetType().Assembly;
         var assemblyFilePath = assembly.Location;
-        var dataFolderPath = Path.Combine(
+        // Path.Join rather than the template's Path.Combine: Combine discards everything
+        // before an argument that looks absolute, which would silently relocate the data
+        // folder outside PluginsPath. Join always concatenates.
+        var dataFolderPath = Path.Join(
             applicationPaths.PluginsPath,
             Path.GetFileNameWithoutExtension(assemblyFilePath));
 
