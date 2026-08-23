@@ -22,7 +22,7 @@
   </a>
 </p>
 
-Ship a Jellyfin client that is already signed in. An administrator asks the server for a session on behalf of an existing user and gets back that user's normal access token — no password, no SSO browser flow, no Quick Connect tap on the device. Built for handing someone a media box that works the moment they plug it in.
+Ship a Jellyfin client that is already signed in. An administrator asks the server for a session on behalf of an existing user and gets back that user's normal access token.
 
 Jellyfin issues the session, lists it beside every other client, and revokes it the usual way. The plugin only asks.
 
@@ -50,13 +50,13 @@ Runs the tests and writes the archive to `artifacts/`.
 
 ## Setup
 
-There is no settings page. The plugin holds no state, and the secret is never typed into or shown by the web UI — the server reads its hash from the environment.
-
-Make a secret and hash it on a trusted machine:
+This plugin is stateless and does not use a settings page. To provision, generate a secret and its SHA256 hash on a trusted machine:
 
 ```bash
 SECRET="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
-printf '%s' "$SECRET" | sha256sum
+HASH="$(printf '%s' "$SECRET" | sha256sum | awk '{print $1}')"
+printf 'Provisioning secret (keep for client): %s\n' "$SECRET"
+printf 'Provisioning hash   (give Jellyfin):  %s\n' "$HASH"
 ```
 
 Give the hash to Jellyfin, keep the secret for whatever does your provisioning:
@@ -98,13 +98,13 @@ curl -X POST "$JELLYFIN_URL/SessionProvisioning/Mint" \
 }
 ```
 
-The token comes back once. It is an ordinary session token carrying that user's own permissions — mint one for an administrator and you get an administrator's session.
+The token comes back once. It is an ordinary session token carrying that user or administrator's own permissions.
 
-Give each managed install its own `deviceId` and keep it: minting again for the same one replaces that install's token instead of leaving a second live credential behind. Revoke like any other client, from the dashboard device list.
+Tokens are tied to a `deviceId`. Re-minting for the same ID replaces the existing token. Manage or revoke devices via the dashboard.
 
 ## Good to know
 
-- **Two credentials are required, always.** Jellyfin administrator authorization *and* the provisioning secret. Every Jellyfin API key counts as an administrator, so the secret is what keeps this to your provisioning service rather than to every integration you have ever issued a key to.
+- **Two credentials are required, always.** Jellyfin administrator authorization *and* the provisioning secret.
 - **Turning it off:** remove the hash and the next request is refused, no restart needed. Disabling the plugin refuses immediately too.
 - **Rate limited** to 120 requests a minute, and one mint runs at a time.
 - If the target user is at their session limit, minting is refused and their existing token keeps working. Revoke the old device first.
@@ -112,7 +112,3 @@ Give each managed install its own `deviceId` and keep it: minting again for the 
 ## Documentation
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the design and the Jellyfin behaviour it depends on, verified against 10.11.11. [docs/SECURITY.md](docs/SECURITY.md) covers the threat model and the invariants. [docs/TESTING.md](docs/TESTING.md) covers reproducing any of it.
-
-## License
-
-[MIT](LICENSE)
