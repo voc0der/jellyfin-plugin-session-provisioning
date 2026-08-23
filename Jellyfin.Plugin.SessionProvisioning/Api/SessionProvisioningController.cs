@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Net.Mime;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.SessionProvisioning.Security;
@@ -279,15 +280,11 @@ public class SessionProvisioningController : ControllerBase
     /// <returns><c>true</c> only if the plugin record is present, supported, and active.</returns>
     private bool IsPluginActive()
     {
-        foreach (var plugin in _pluginManager.Plugins)
-        {
-            if (plugin.Id.Equals(SessionProvisioningPlugin.PluginId))
-            {
-                return plugin.IsEnabledAndSupported
-                    && plugin.Manifest.Status == PluginStatus.Active;
-            }
-        }
+        var plugin = _pluginManager.Plugins
+            .FirstOrDefault(candidate => candidate.Id.Equals(SessionProvisioningPlugin.PluginId));
 
-        return false;
+        return plugin is not null
+            && plugin.IsEnabledAndSupported
+            && plugin.Manifest.Status == PluginStatus.Active;
     }
 }
