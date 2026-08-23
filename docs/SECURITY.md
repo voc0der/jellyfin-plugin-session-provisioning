@@ -131,6 +131,20 @@ Session provisioning succeeded user=<guid> device=<device-id>
 Failures log the reason category (unauthorized / bad secret / unknown user / invalid
 input) and nothing that would help an attacker calibrate a guess.
 
+### Log-entry integrity
+
+`device-id` above is caller-supplied, so it is passed through
+`Security.LogSanitizer.ForLog` before it reaches a log statement: control and format
+characters are replaced and the length is bounded, so a value cannot append a forged
+second entry or reorder the one carrying it (CWE-117).
+
+This is the second line of defence, not the first. `MintSessionRequest` already
+constrains `deviceId` to `[A-Za-z0-9._:-]{1,128}` and `[ApiController]` enforces that
+before the action body runs — `scripts/smoke-test.sh` asserts 400 for a device ID
+containing a space and for a newline in a device name. The sanitizer exists so that the
+integrity of an audit line does not depend on a validation attribute declared in
+another file continuing to be correct.
+
 ### Upstream caveat: Jellyfin logs tokens it invalidates
 
 `SessionManager.Logout(Device)` writes the access token in plaintext at INFO

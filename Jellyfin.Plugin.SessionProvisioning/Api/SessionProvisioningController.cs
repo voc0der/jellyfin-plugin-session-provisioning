@@ -213,7 +213,7 @@ public class SessionProvisioningController : ControllerBase
             _logger.LogWarning(
                 "Session provisioning refused by Jellyfin for user {UserId} device {DeviceId}",
                 request.UserId,
-                request.DeviceId);
+                LogSanitizer.ForLog(request.DeviceId));
             return Conflict();
         }
 
@@ -221,7 +221,7 @@ public class SessionProvisioningController : ControllerBase
         _logger.LogInformation(
             "Session provisioning succeeded user={UserId} device={DeviceId}",
             user.Id,
-            request.DeviceId);
+            LogSanitizer.ForLog(request.DeviceId));
 
         return Ok(new MintSessionResponse
         {
