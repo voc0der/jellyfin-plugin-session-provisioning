@@ -34,6 +34,9 @@ Requires Jellyfin 10.11.11. Add this repository under **Dashboard > Plugins > Re
 https://raw.githubusercontent.com/voc0der/jellyfin-plugin-session-provisioning/main/manifest.json
 ```
 
+> [!NOTE]
+> Full repository of this author's plugins: [voc0der/jellyfin-plugins](https://github.com/voc0der/jellyfin-plugins).
+
 ### Manual
 
 1. Download the ZIP from the [releases page](https://github.com/voc0der/jellyfin-plugin-session-provisioning/releases)
