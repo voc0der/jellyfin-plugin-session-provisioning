@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JELLYFIN_VERSION="${JELLYFIN_VERSION:-10.11.11}"
+JELLYFIN_VERSION="${JELLYFIN_VERSION:-12.0.0}"
 CONTAINER="${CONTAINER:-jf-sp-smoke}"
 PORT="${PORT:-8096}"
 JF="http://localhost:${PORT}"
@@ -104,10 +104,10 @@ echo "==> Installing plugin"
 # docker cp rather than a bind mount: in sandboxed environments the daemon may
 # resolve host paths in a different namespace, silently mounting an empty dir.
 mkdir -p "$WORK/$PLUGIN_DIR_NAME"
-cp "$REPO_ROOT/Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/Jellyfin.Plugin.SessionProvisioning.dll" "$WORK/$PLUGIN_DIR_NAME/"
+cp "$REPO_ROOT/Jellyfin.Plugin.SessionProvisioning/bin/Release/net10.0/Jellyfin.Plugin.SessionProvisioning.dll" "$WORK/$PLUGIN_DIR_NAME/"
 # Ship the meta.json the build generated, not a hand-written copy: a second copy is
 # a second thing to drift.
-cp "$REPO_ROOT/Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/meta.json" "$WORK/$PLUGIN_DIR_NAME/"
+cp "$REPO_ROOT/Jellyfin.Plugin.SessionProvisioning/bin/Release/net10.0/meta.json" "$WORK/$PLUGIN_DIR_NAME/"
 docker cp "$WORK/$PLUGIN_DIR_NAME" "$CONTAINER:/config/plugins/$PLUGIN_DIR_NAME"
 # stop/start rather than restart: with restart, the first readiness probe can be
 # answered by the old process that is still shutting down.

@@ -78,7 +78,7 @@ Response returns the access token exactly once:
 }
 ```
 
-## Verified Jellyfin surface (10.11.11)
+## Verified Jellyfin surface (10.11.11; package surface re-checked on 12.0.0)
 
 Everything below was verified against the pinned packages and the `v10.11.11` source
 tag, not from memory. Re-verify on any version bump.
@@ -92,10 +92,34 @@ Verification commands used:
   `Jellyfin.Server/Extensions/ApiServiceCollectionExtensions.cs`, and
   `Jellyfin.Api/Auth/CustomAuthenticationHandler.cs` at tag `v10.11.11`.
 
+### Status after the 12.0.0 retarget
+
+The **package** half was re-verified by the same reflection method against
+`Jellyfin.Controller` / `Jellyfin.Model` / `MediaBrowser.Common` 12.0.0, and is
+unchanged:
+
+- `ISessionManager.AuthenticateDirect(AuthenticationRequest)` — same signature;
+- `AuthenticationRequest` — same nine properties (`Username`, `UserId`, `Password`,
+  `PasswordSha1`, `App`, `AppVersion`, `DeviceId`, `DeviceName`, `RemoteEndPoint`);
+- `Policies.RequiresElevation` — still in `MediaBrowser.Common.Api`.
+
+The **server-source** half has *not* been re-read at the `v12.0.0` tag: the
+`SessionManager` internals quoted below (the `AuthenticateNewSessionInternal`
+delegation, the mandatory-field guards, and the user lookup), the endpoint policy
+registration, and the API-key-to-`Administrator` mapping are all still cited at
+`v10.11.11`. Those files are not shipped in the NuGet packages, so reflection cannot
+settle them.
+
+The API-key mapping matters most: the entire reason the independent provisioning
+secret exists is that any valid API key satisfies `RequiresElevation`. Re-read
+`Jellyfin.Api/Auth/CustomAuthenticationHandler.cs` at `v12.0.0` and confirm that still
+holds before trusting this plugin on a 12 server. See `SECURITY.md`.
+
 ### 1. Session-minting entry point
 
 ```csharp
 // MediaBrowser.Controller.Session.ISessionManager, MediaBrowser.Controller 10.11.11.0
+// Signature unchanged in MediaBrowser.Controller 12.0.0.0.
 Task<AuthenticationResult> AuthenticateDirect(AuthenticationRequest request);
 ```
 

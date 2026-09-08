@@ -27,7 +27,7 @@ Warnings are errors (`TreatWarningsAsErrors`), so a clean build means 0 warnings
 artifact is:
 
 ```text
-Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/Jellyfin.Plugin.SessionProvisioning.dll
+Jellyfin.Plugin.SessionProvisioning/bin/Release/net10.0/Jellyfin.Plugin.SessionProvisioning.dll
 ```
 
 ## Unit tests
@@ -41,13 +41,13 @@ dotnet test
 Verified working recipe against the pinned target version.
 
 ```sh
-docker pull jellyfin/jellyfin:10.11.11
+docker pull jellyfin/jellyfin:12.0.0
 docker rm -f jf-sp-test 2>/dev/null
 SECRET="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 HASH="$(printf '%s' "$SECRET" | sha256sum | cut -d' ' -f1)"
 docker run -d --name jf-sp-test -p 8096:8096 \
     -e "SESSION_PROVISIONING_SECRET_HASH=$HASH" \
-    jellyfin/jellyfin:10.11.11
+    jellyfin/jellyfin:12.0.0
 ```
 
 The plugin has no configuration page; the hash is supplied by the environment. Do not
@@ -63,8 +63,8 @@ it in. `meta.json` comes out of the build (an MSBuild target fills it from
 ```sh
 PLUGIN_DIR="Session Provisioning_1.0.0.0"
 mkdir -p "/tmp/$PLUGIN_DIR"
-cp Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/Jellyfin.Plugin.SessionProvisioning.dll "/tmp/$PLUGIN_DIR/"
-cp Jellyfin.Plugin.SessionProvisioning/bin/Release/net9.0/meta.json "/tmp/$PLUGIN_DIR/"
+cp Jellyfin.Plugin.SessionProvisioning/bin/Release/net10.0/Jellyfin.Plugin.SessionProvisioning.dll "/tmp/$PLUGIN_DIR/"
+cp Jellyfin.Plugin.SessionProvisioning/bin/Release/net10.0/meta.json "/tmp/$PLUGIN_DIR/"
 
 docker cp "/tmp/$PLUGIN_DIR" "jf-sp-test:/config/plugins/$PLUGIN_DIR"
 docker restart jf-sp-test

@@ -15,7 +15,7 @@ Issues and pull requests are welcome!
 dotnet build --configuration Release
 ```
 
-The plugin targets Jellyfin 10.11.11 and `net9.0`. Package references must remain
+The plugin targets Jellyfin 12.0.0 and `net10.0`. Package references must remain
 aligned with the supported Jellyfin server version.
 
 ## Testing

@@ -41,6 +41,12 @@ On Jellyfin 10.11.11, `CustomAuthenticationHandler` assigns the `Administrator` 
 `ARCHITECTURE.md` §7). Every API key already issued on the server therefore satisfies
 `RequiresElevation` on its own.
 
+This was read at `v10.11.11` and has **not** been re-confirmed against `v12.0.0`. The
+plugin now targets Jellyfin 12, and this mapping is the single assumption the second
+gate exists to defend against, so re-read that handler at the 12 tag before relying on
+this section. Nothing about the gate changes if the mapping still holds; if it has
+changed, the threat model here needs revisiting rather than the code.
+
 Without the secondary secret, installing this plugin would silently upgrade every
 existing API key — including ones handed to unrelated integrations — into the power to
 mint a session for any user, including administrators. The provisioning secret keeps

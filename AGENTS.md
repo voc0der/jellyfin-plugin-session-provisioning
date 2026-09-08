@@ -11,12 +11,12 @@ device sessions. One gated endpoint, no stored state, no UI.
 ## Target version (verified)
 
 ```text
-Target Jellyfin Server:     10.11.11
-Target Jellyfin.Controller: 10.11.11
-Target Jellyfin.Model:      10.11.11
-Target framework:           net9.0
+Target Jellyfin Server:     12.0.0
+Target Jellyfin.Controller: 12.0.0
+Target Jellyfin.Model:      12.0.0
+Target framework:           net10.0
 (all of the above live in Directory.Build.props; meta.json is generated from them)
-targetAbi:                  10.11.0.0
+targetAbi:                  12.0.0.0
 ```
 
 Package references must match the installed server version or the plugin loads as
@@ -48,7 +48,8 @@ Package references must match the installed server version or the plugin loads a
 3. Inspect the plugin-template conventions and package versions already in this repo.
 4. Verify any Jellyfin API signature against the version actually referenced by the
    project before coding against it. `docs/ARCHITECTURE.md` records what has already
-   been verified against 10.11.11, and how it was verified. If Jellyfin's source
+   been verified against 10.11.11 (package surface re-checked on 12.0.0), and how it
+   was verified. If Jellyfin's source
    disagrees with any document here, the source wins — update the document first.
 
 ## Validation
