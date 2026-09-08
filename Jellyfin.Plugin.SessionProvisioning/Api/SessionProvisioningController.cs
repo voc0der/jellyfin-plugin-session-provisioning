@@ -219,10 +219,15 @@ public class SessionProvisioningController : ControllerBase
         }
 
         // Audit line: shape of the operation only. Never the token.
-        _logger.LogInformation(
-            "Session provisioning succeeded user={UserId} device={DeviceId}",
-            user.Id,
-            LogSanitizer.ForLog(request.DeviceId));
+        // Guarded because ForLog runs a regex over the value, and CA1873 (new in the
+        // .NET 10 analyzers) counts that as work not worth doing when Information is off.
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Session provisioning succeeded user={UserId} device={DeviceId}",
+                user.Id,
+                LogSanitizer.ForLog(request.DeviceId));
+        }
 
         return Ok(new MintSessionResponse
         {

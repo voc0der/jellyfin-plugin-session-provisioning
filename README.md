@@ -28,7 +28,7 @@ Jellyfin issues the session, lists it beside every other client, and revokes it 
 
 ## Installation
 
-Requires Jellyfin 10.11.11. Add this repository under **Dashboard > Plugins > Repositories**, install **Session Provisioning** from the catalog, and restart.
+Requires Jellyfin 12.0.0. Add this repository under **Dashboard > Plugins > Repositories**, install **Session Provisioning** from the catalog, and restart.
 
 ```
 https://raw.githubusercontent.com/voc0der/jellyfin-plugin-session-provisioning/main/manifest.json
@@ -114,4 +114,4 @@ Tokens are tied to a `deviceId`. Re-minting for the same ID replaces the existin
 
 ## Documentation
 
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the design and the Jellyfin behaviour it depends on, verified against 10.11.11. [docs/SECURITY.md](docs/SECURITY.md) covers the threat model and the invariants. [docs/TESTING.md](docs/TESTING.md) covers reproducing any of it.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the design and the Jellyfin behaviour it depends on, verified against 10.11.11 with the package-level surface re-checked on 12.0.0. [docs/SECURITY.md](docs/SECURITY.md) covers the threat model and the invariants. [docs/TESTING.md](docs/TESTING.md) covers reproducing any of it.
