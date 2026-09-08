@@ -8,6 +8,14 @@
     "owner": "voc0der",
     "versions": [
       {
+        "version": "1.0.0.3",
+        "changelog": "## What's Changed\n\n- chore: target Jellyfin 12.0.0 and .NET 10 (cf25827)\n- docs: link back to the full plugin repository [skip ci] (789b5c2)\n- chore(ci): notify centralized plugin catalog [skip ci] (49b247c)\n- chore(test): bump xUnit dependencies (#6, #7) [skip ci] (d8bc4ff)\n- docs(readme): conform icon block to sibling plugin repos [skip ci] (1bfda4e)\n- chore(release): update the plugin catalogue for version 1.0.0.2 (32f5c58)\n\n**Full Changelog**: https://github.com/voc0der/jellyfin-plugin-session-provisioning/compare/1.0.0.2...1.0.0.3\n",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/voc0der/jellyfin-plugin-session-provisioning/releases/download/1.0.0.3/SessionProvisioning_1.0.0.3_jellyfin-12.0.0.zip",
+        "checksum": "f1cc58fcf1132053779654872ea1b189",
+        "timestamp": "2026-09-08T21:17:20Z"
+      },
+      {
         "version": "1.0.0.2",
         "changelog": "## What's Changed\n\n- docs(readme): tighten setup and usage prose (eb6f698)\n- docs(readme): update coverage badge to 95% (7323420)\n- refactor: clear the remaining CodeQL quality alerts (1e1a629)\n- fix(security): sanitize caller-supplied device IDs before logging (7fd5e83)\n- chore(deps): bump NSubstitute from 5.3.0 to 6.2.0 (b77b753)\n- chore(deps): bump Microsoft.NET.Test.Sdk from 17.12.0 to 18.9.0 (21a56e7)\n- chore(deps): bump coverlet.collector from 6.0.4 to 10.0.1 (c34783c)\n- chore: update repository assets and contributing guide [skip ci] (db3bf95)\n- chore(release): update the plugin catalogue for version 1.0.0.1 (c22db95)\n\n**Full Changelog**: https://github.com/voc0der/jellyfin-plugin-session-provisioning/compare/1.0.0.1...1.0.0.2\n",
         "targetAbi": "10.11.0.0",
