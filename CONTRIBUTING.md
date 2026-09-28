@@ -77,6 +77,7 @@ installer functionality.
 - Run the relevant validation before submitting
 - Test against a running Jellyfin instance when changing runtime behavior
 - Describe what your PR changes and why
+- Merging to `main` does not publish anything by itself. Add the `release` label before merging to cut a new tag and release; unlabelled changes go out with the next labelled merge
 
 ## LLM Disclosure
 
