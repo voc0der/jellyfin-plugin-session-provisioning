@@ -282,10 +282,10 @@ public sealed class SessionProvisioningControllerTests
         _sessionManager.AuthenticateDirect(Arg.Any<AuthenticationRequest>()).Returns(inFlight.Task);
 
         var first = CreateController(mintSerializer: serializer).MintSession(Request());
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         var second = CreateController(mintSerializer: serializer).MintSession(Request());
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         // The load-bearing assertion. Checking only that `second` is incomplete proves
         // nothing: both calls await the same unfinished task, so it would be incomplete
@@ -305,7 +305,7 @@ public sealed class SessionProvisioningControllerTests
     public async Task MintSession_GateHeldTooLong_IsServiceUnavailable()
     {
         using var serializer = new MintSerializer(TimeSpan.FromMilliseconds(50));
-        var held = await serializer.EnterAsync();
+        var held = await serializer.EnterAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(held);
 
         try
@@ -401,7 +401,7 @@ public sealed class SessionProvisioningControllerTests
     public async Task MintSession_CallerDisconnectsWhileQueued_DoesNotMint()
     {
         using var serializer = new MintSerializer(TimeSpan.FromSeconds(30));
-        using var held = await serializer.EnterAsync();
+        using var held = await serializer.EnterAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(held);
 
         var controller = CreateController(mintSerializer: serializer);
@@ -409,7 +409,7 @@ public sealed class SessionProvisioningControllerTests
         controller.ControllerContext.HttpContext.RequestAborted = aborted.Token;
 
         var pending = controller.MintSession(Request());
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(pending.IsCompleted);
 
         await aborted.CancelAsync();

@@ -9,7 +9,7 @@ public static class MintSerializerTests
     {
         using var serializer = new MintSerializer(TimeSpan.FromSeconds(1));
 
-        using var slot = await serializer.EnterAsync();
+        using var slot = await serializer.EnterAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(slot);
     }
@@ -18,9 +18,9 @@ public static class MintSerializerTests
     public static async Task EnterAsync_WhileHeld_TimesOut()
     {
         using var serializer = new MintSerializer(TimeSpan.FromMilliseconds(50));
-        using var held = await serializer.EnterAsync();
+        using var held = await serializer.EnterAsync(TestContext.Current.CancellationToken);
 
-        Assert.Null(await serializer.EnterAsync());
+        Assert.Null(await serializer.EnterAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -28,11 +28,11 @@ public static class MintSerializerTests
     {
         using var serializer = new MintSerializer(TimeSpan.FromMilliseconds(200));
 
-        var first = await serializer.EnterAsync();
+        var first = await serializer.EnterAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(first);
         first!.Dispose();
 
-        using var second = await serializer.EnterAsync();
+        using var second = await serializer.EnterAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(second);
     }
 
@@ -41,14 +41,14 @@ public static class MintSerializerTests
     {
         using var serializer = new MintSerializer(TimeSpan.FromMilliseconds(200));
 
-        var slot = await serializer.EnterAsync();
+        var slot = await serializer.EnterAsync(TestContext.Current.CancellationToken);
         slot!.Dispose();
         slot.Dispose();
 
         // A double release would let two callers in at once.
-        using var held = await serializer.EnterAsync();
+        using var held = await serializer.EnterAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(held);
-        Assert.Null(await serializer.EnterAsync());
+        Assert.Null(await serializer.EnterAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
