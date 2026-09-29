@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JELLYFIN_VERSION="${JELLYFIN_VERSION:-12.0.0}"
+JELLYFIN_VERSION="${JELLYFIN_VERSION:-12.1.0}"
 CONTAINER="${CONTAINER:-jf-sp-smoke}"
 PORT="${PORT:-8096}"
 JF="http://localhost:${PORT}"
